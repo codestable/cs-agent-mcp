@@ -1,0 +1,116 @@
+name: 发布 npm
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  NODE_VERSION: 24
+  PNPM_VERSION: 10.33.2
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v7.0.0
+        with:
+          fetch-depth: 0
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 验证发布元数据
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          node - <<'NODE'
+          const { execFileSync } = require("node:child_process");
+          const { readFileSync } = require("node:fs");
+
+          const pkg = JSON.parse(readFileSync("package.json", "utf8"));
+          const releaseTag = process.env.RELEASE_TAG ?? "";
+          const releaseSha = process.env.RELEASE_SHA ?? "";
+          const errors = [];
+
+          if (pkg.name !== "cs-agent-mcp") {
+            errors.push(`package name 必须是 cs-agent-mcp，当前是 ${pkg.name ?? "<missing>"}`);
+          }
+          if (pkg.repository?.url !== "https://github.com/codestable/cs-agent-mcp") {
+            errors.push("repository.url 必须是 https://github.com/codestable/cs-agent-mcp");
+          }
+          if (releaseTag !== `v${pkg.version}`) {
+            errors.push(`tag ${releaseTag} 与 package.json 版本 ${pkg.version} 不匹配`);
+          }
+          try {
+            execFileSync("git", ["merge-base", "--is-ancestor", releaseSha, "origin/main"], {
+              stdio: "ignore",
+            });
+          } catch {
+            errors.push(`tag commit ${releaseSha} 不在 origin/main`);
+          }
+          if (errors.length > 0) {
+            errors.forEach((error) => console.error(error));
+            process.exit(1);
+          }
+          NODE
+
+      - name: 运行完整检查
+        run: pnpm run check
+
+      - name: 验证实际发布包
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_file=$(npm pack --json --silent | node -e '
+            let input = "";
+            process.stdin.on("data", (chunk) => (input += chunk));
+            process.stdin.on("end", () => console.log(JSON.parse(input)[0].filename));
+          ')
+          install_root="${RUNNER_TEMP}/cs-agent-mcp-install"
+          npm install --prefix "${install_root}" "./${package_file}" --no-audit --no-fund
+          CS_AGENT_MCP_BIN="${install_root}/node_modules/.bin/cs-agent-mcp" \
+            CS_AGENT_MCP_MOCK_AGENT="${PWD}/dist-test/test/mock-agent.js" \
+            pnpm run package:smoke
+
+      - name: 检查版本是否已发布
+        id: published
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./package.json').version")
+          if npm view "cs-agent-mcp@${version}" version >/dev/null 2>&1; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "cs-agent-mcp@${version} 已发布，跳过重复发布。"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 发布到 npm
+        if: steps.published.outputs.skip != 'true'
+        run: npm publish --access public --provenance

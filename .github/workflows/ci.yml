@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  PNPM_VERSION: 10.33.2
+
+jobs:
+  check:
+    name: Node.js ${{ matrix.node-version }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [22, 24]
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v7.0.0
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: pnpm
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 运行完整检查
+        run: pnpm run check
+
+  package-smoke:
+    name: npm 安装烟测
+    needs: check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v7.0.0
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 打包并安装
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm run build:test
+          package_file=$(npm pack --json --silent | node -e '
+            let input = "";
+            process.stdin.on("data", (chunk) => (input += chunk));
+            process.stdin.on("end", () => console.log(JSON.parse(input)[0].filename));
+          ')
+          install_root="${RUNNER_TEMP}/cs-agent-mcp-install"
+          npm install --prefix "${install_root}" "./${package_file}" --no-audit --no-fund
+          binary="${install_root}/node_modules/.bin/cs-agent-mcp"
+          "${binary}" --version
+          "${binary}" --help
+          CS_AGENT_MCP_BIN="${binary}" \
+            CS_AGENT_MCP_MOCK_AGENT="${PWD}/dist-test/test/mock-agent.js" \
+            pnpm run package:smoke

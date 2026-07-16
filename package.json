@@ -1,0 +1,82 @@
+{
+  "name": "cs-agent-mcp",
+  "version": "0.1.0",
+  "description": "通过 MCP 统一创建、调用和编排本机 Codex、Claude 等编码 Agent",
+  "keywords": [
+    "acp",
+    "agent-client-protocol",
+    "ai",
+    "claude-code",
+    "codex",
+    "coding-agent",
+    "mcp",
+    "multi-agent"
+  ],
+  "homepage": "https://github.com/codestable/cs-agent-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/codestable/cs-agent-mcp/issues"
+  },
+  "license": "MIT",
+  "author": "CodeStable",
+  "contributors": [
+    "OpenClaw Team <dev@openclaw.ai>"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/codestable/cs-agent-mcp"
+  },
+  "bin": {
+    "cs-agent-mcp": "dist/mcp-cli.js"
+  },
+  "files": [
+    "dist",
+    "docs/MCP_ARCHITECTURE.md",
+    "README.md",
+    "LICENSE"
+  ],
+  "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsdown src/mcp-cli.ts --format esm --clean --platform node --target node22 --no-fixedExtension",
+    "build:quiet": "tsdown --logLevel silent src/mcp-cli.ts --format esm --clean --platform node --target node22 --no-fixedExtension",
+    "build:test": "node -e \"require('node:fs').rmSync('dist-test',{recursive:true,force:true})\" && tsc6 -p tsconfig.test.json",
+    "check": "pnpm run format:check && pnpm run check:docs && pnpm run typecheck && pnpm run lint && pnpm run build && pnpm run test && pnpm run pack:check",
+    "check:docs": "markdownlint-cli2 README.md AGENTS.md CHANGELOG.md docs/MCP_ARCHITECTURE.md",
+    "dev": "tsx src/mcp-cli.ts",
+    "format": "oxfmt --write",
+    "format:check": "oxfmt --check",
+    "lint": "oxlint --type-aware --tsconfig=tsconfig.test.json --deny-warnings src test",
+    "lint:fix": "oxlint --type-aware --tsconfig=tsconfig.test.json --fix src test && pnpm run format",
+    "pack:check": "npm pack --dry-run",
+    "package:smoke": "node scripts/package-smoke.mjs",
+    "prepack": "tsdown --logLevel silent src/mcp-cli.ts --format esm --clean --platform node --target node22 --no-fixedExtension",
+    "prepublishOnly": "pnpm run check",
+    "test": "pnpm run build:test && node --test dist-test/test/client.test.js dist-test/test/file-session-store.test.js dist-test/test/mcp-cli.test.js dist-test/test/mcp-e2e.test.js dist-test/test/mcp-facade-lock.test.js dist-test/test/mcp-facade-store.test.js dist-test/test/mcp-facade.test.js dist-test/test/mcp-runtime-adapter.test.js dist-test/test/runtime-manager.test.js dist-test/test/spawn-options.test.js",
+    "typecheck": "tsc6 --noEmit",
+    "typecheck:tsc": "tsc6 --noEmit"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "^1.2.1",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "commander": "^15.0.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "@typescript/native": "npm:typescript@^7.0.2",
+    "markdownlint-cli2": "^0.23.0",
+    "oxfmt": "^0.58.0",
+    "oxlint": "^1.73.0",
+    "oxlint-tsgolint": "^0.24.0",
+    "skillflag": "^0.2.0",
+    "tsdown": "^0.22.4",
+    "tsx": "^4.23.0",
+    "typescript": "npm:@typescript/typescript6@^6.0.2"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "packageManager": "pnpm@10.33.2"
+}

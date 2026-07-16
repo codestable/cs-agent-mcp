@@ -1,0 +1,9 @@
+node_modules/
+.pnpm-store/
+.crabbox/
+dist/
+dist-test/
+examples/flows/replay-viewer/dist/
+*.tgz
+.worktrees/
+coverage/

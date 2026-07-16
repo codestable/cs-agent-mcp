@@ -1,0 +1,24 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "dist-test",
+    "rootDir": ".",
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false
+  },
+  "include": [
+    "src/**/*.ts",
+    "test/client.test.ts",
+    "test/mcp-cli.test.ts",
+    "test/mcp-e2e.test.ts",
+    "test/mcp-facade-lock.test.ts",
+    "test/mcp-facade-store.test.ts",
+    "test/mcp-facade.test.ts",
+    "test/mcp-runtime-adapter.test.ts",
+    "test/mock-agent.ts",
+    "test/runtime-manager.test.ts",
+    "test/spawn-options.test.ts"
+  ],
+  "exclude": ["node_modules", "dist", "dist-test"]
+}
