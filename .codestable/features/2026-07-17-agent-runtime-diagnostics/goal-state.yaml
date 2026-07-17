@@ -1,9 +1,9 @@
 feature: "2026-07-17-agent-runtime-diagnostics"
-status: ready-to-dispatch
+status: running
 baseline_ref: "23bd73868624ea843807a602ba550e1c803aa63d"
 stage: implementation
-driver_kind: none
-driver_id: ""
+driver_kind: paseo
+driver_id: "e0827d08-b552-420e-8c05-507137744ba3"
 handoff_reason: ""
 handoff_next: ""
 design: ".codestable/features/2026-07-17-agent-runtime-diagnostics/agent-runtime-diagnostics-design.md"
