@@ -22,5 +22,5 @@ ledger:
     evidence: "RED: pnpm run build:test && node --test dist-test/test/mcp-cli.test.js failed new agents --help assertion before implementation; GREEN: same command passed 10/10 tests; VERIFY: pnpm run build && node dist/mcp-cli.js --help && node dist/mcp-cli.js agents --help passed; cleanliness rg console.log|console.error|TODO|FIXME|XXX found no new matches"
   - step_id: S2
     status: done
-    commit_range: "a13922e..HEAD"
+    commit_range: "a13922e..148891f"
     evidence: "RED: pnpm run build:test && node --test dist-test/test/agent-diagnostics.test.js failed because ../src/mcp/diagnostics/index.js did not exist; GREEN: same command passed 2/2 agent diagnostics tests; VERIFY: pnpm run format:check && pnpm run lint && pnpm run test passed, including package runner 201/201 tests and agent-diagnostics.test.js; cleanliness rg console.log|console.error|TODO|FIXME|XXX found no new matches"
