@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -13,6 +14,49 @@ import { ListRootsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 
 const CLI_PATH = fileURLToPath(new URL("../src/mcp-cli.js", import.meta.url));
 const MOCK_AGENT_PATH = fileURLToPath(new URL("./mock-agent.js", import.meta.url));
+
+async function runCli(
+  args: string[],
+  env: NodeJS.ProcessEnv = {},
+): Promise<{
+  code: number | null;
+  stdout: string;
+  stderr: string;
+}> {
+  const child = spawn(process.execPath, [CLI_PATH, ...args], {
+    env: { ...process.env, ...env },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", (chunk: string) => {
+    stdout += chunk;
+  });
+  child.stderr.on("data", (chunk: string) => {
+    stderr += chunk;
+  });
+  const code = await new Promise<number | null>((resolve, reject) => {
+    child.on("error", reject);
+    child.on("exit", resolve);
+  });
+  return { code, stdout, stderr };
+}
+
+test("cs-agent-mcp exposes agents diagnostics subcommands without starting stdio", async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "cs-agent-mcp-agents-help-"));
+  t.after(async () => await fs.rm(home, { recursive: true, force: true }));
+
+  const result = await runCli(["agents", "--help"], { HOME: home });
+
+  assert.equal(result.code, 0);
+  assert.equal(result.stderr, "");
+  assert.match(result.stdout, /Usage: cs-agent-mcp agents/);
+  assert.match(result.stdout, /list/);
+  assert.match(result.stdout, /status/);
+  assert.match(result.stdout, /attach/);
+});
 
 test("cs-agent-mcp serves the facade over stdio", async (t) => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "cs-agent-mcp-cli-"));

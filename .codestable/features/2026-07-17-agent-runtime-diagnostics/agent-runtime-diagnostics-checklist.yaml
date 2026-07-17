@@ -12,7 +12,7 @@ steps:
     action: "CLI 编排骨架：分离默认 stdio MCP 与 agents 诊断子命令"
     exit_signal: "无参数 stdio 回归通过，help/空读模型可执行，新增测试文件已加入 scripts.test 且输出证明执行"
     evidence: "integration test + command output"
-    status: pending
+    status: done
   - id: S2
     action: "只读状态节点：接通精确 snapshot 发现、nested 校验、实例 probe、全集 selector 与诊断 DTO"
     exit_signal: "running/stopped/unknown/corrupt fixture 结果确定，tmp/lock/candidate 不误报，selector fail-closed"
@@ -46,7 +46,7 @@ checks:
   - id: C03
     item: "无参数 cs-agent-mcp 保持直接启动 stdio MCP，且不增加终端输出"
     source: 编排骨架
-    status: pending
+    status: done
   - id: C04
     item: "list 默认过滤与 selector 全集解析解耦；隐藏候选参与歧义，unreadable snapshot 下 prefix fail-closed"
     source: 流程级约束
@@ -62,7 +62,7 @@ checks:
   - id: C07
     item: "npm binary 命令树只新增 agents list/status/attach 一个公共挂载面"
     source: 挂载点
-    status: pending
+    status: done
   - id: C08
     item: "诊断路径不调用 mutation/runtime/identity/lock acquire-remove；live attach 在无 fs-write 权限下可运行"
     source: 范围守护
