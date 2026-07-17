@@ -22,7 +22,7 @@ steps:
     action: "查询节点：完成 agents list/status 的文本、JSON 和错误契约"
     exit_signal: "正常、空结果、--all、隐藏目标、唯一前缀、歧义和损坏数据的子进程 CLI 测试通过"
     evidence: "CLI integration test"
-    status: pending
+    status: done
   - id: S4
     action: "跟随节点：完成 attach 历史 baseline、目录 watcher/fallback、cursor、事件投影、最终 drain 和终止语义"
     exit_signal: "mock Facade 无漏读/重复，stop/restart/Ctrl-C 正确；permission 子进程可 read/watch/kill、写入被拒绝"

@@ -11,9 +11,11 @@ import {
   StdioClientTransport,
 } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { ListRootsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import type { FacadeSnapshot } from "../src/mcp/facade/types.js";
 
 const CLI_PATH = fileURLToPath(new URL("../src/mcp-cli.js", import.meta.url));
 const MOCK_AGENT_PATH = fileURLToPath(new URL("./mock-agent.js", import.meta.url));
+const TEST_TIMESTAMP = "2026-07-17T00:00:00.000Z";
 
 async function runCli(
   args: string[],
@@ -44,6 +46,63 @@ async function runCli(
   return { code, stdout, stderr };
 }
 
+function diagnosticSnapshot(agents: FacadeSnapshot["agents"]): FacadeSnapshot {
+  return {
+    schema: "cs-agent-mcp.facade.v1",
+    revision: 1,
+    nextCursor: 1,
+    agents,
+    turns: {},
+    messages: {},
+    permissions: {},
+    events: [],
+    idempotency: {},
+    identities: {},
+  };
+}
+
+function diagnosticAgent(input: {
+  agentId: string;
+  kind?: "root" | "managed";
+  state?: FacadeSnapshot["agents"][string]["state"];
+  cwd?: string;
+}): FacadeSnapshot["agents"][string] {
+  return {
+    agentId: input.agentId,
+    rootExecutionId: "root-1",
+    kind: input.kind ?? "managed",
+    agent: "claude",
+    name: input.kind === "root" ? "root" : "worker",
+    cwd: input.cwd ?? "/workspace",
+    mode: "persistent",
+    depth: input.kind === "root" ? 0 : 1,
+    state: input.state ?? "idle",
+    queueDepth: 0,
+    createdAt: TEST_TIMESTAMP,
+    updatedAt: TEST_TIMESTAMP,
+  };
+}
+
+async function writeDiagnosticSnapshot(
+  home: string,
+  instanceId: string,
+  snapshot: FacadeSnapshot,
+): Promise<string> {
+  const facadesDir = path.join(home, ".cs-agent-mcp", "mcp", "facades");
+  await fs.mkdir(facadesDir, { recursive: true });
+  const snapshotPath = path.join(facadesDir, `${instanceId}.json`);
+  await fs.writeFile(snapshotPath, `${JSON.stringify(snapshot)}\n`, "utf8");
+  return snapshotPath;
+}
+
+async function writeRunningLock(snapshotPath: string): Promise<void> {
+  await fs.writeFile(
+    `${snapshotPath}.lock`,
+    `${JSON.stringify({ pid: process.pid, token: "test-token", createdAt: TEST_TIMESTAMP })}\n`,
+    "utf8",
+  );
+}
+
 test("cs-agent-mcp exposes agents diagnostics subcommands without starting stdio", async (t) => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "cs-agent-mcp-agents-help-"));
   t.after(async () => await fs.rm(home, { recursive: true, force: true }));
@@ -56,6 +115,93 @@ test("cs-agent-mcp exposes agents diagnostics subcommands without starting stdio
   assert.match(result.stdout, /list/);
   assert.match(result.stdout, /status/);
   assert.match(result.stdout, /attach/);
+});
+
+test("cs-agent-mcp agents list renders discovered snapshots as text and JSON", async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "cs-agent-mcp-agents-list-"));
+  t.after(async () => await fs.rm(home, { recursive: true, force: true }));
+  const runningPath = await writeDiagnosticSnapshot(
+    home,
+    "aaaaaaaaaaaaaaaaaaaaaaaa",
+    diagnosticSnapshot({
+      "11111111-1111-4111-8111-111111111111": diagnosticAgent({
+        agentId: "11111111-1111-4111-8111-111111111111",
+        state: "running",
+      }),
+      "22222222-2222-4222-8222-222222222222": diagnosticAgent({
+        agentId: "22222222-2222-4222-8222-222222222222",
+        state: "destroyed",
+      }),
+    }),
+  );
+  await writeRunningLock(runningPath);
+  await writeDiagnosticSnapshot(
+    home,
+    "bbbbbbbbbbbbbbbbbbbbbbbb",
+    diagnosticSnapshot({
+      "33333333-3333-4333-8333-333333333333": diagnosticAgent({
+        agentId: "33333333-3333-4333-8333-333333333333",
+      }),
+    }),
+  );
+
+  const text = await runCli(["agents", "list"], { HOME: home });
+  assert.equal(text.code, 0);
+  assert.match(text.stdout, /AGENT ID/);
+  assert.match(text.stdout, /11111111-1111-4111-8111-111111111111/);
+  assert.doesNotMatch(text.stdout, /22222222-2222-4222-8222-222222222222/);
+  assert.doesNotMatch(text.stdout, /33333333-3333-4333-8333-333333333333/);
+
+  const json = await runCli(["agents", "list", "--all", "--json"], { HOME: home });
+  assert.equal(json.code, 0);
+  const parsed = JSON.parse(json.stdout) as {
+    schema?: string;
+    agents?: Array<{ agentId?: string; instance?: { state?: string } }>;
+  };
+  assert.equal(parsed.schema, "cs-agent-mcp.diagnostics.v1");
+  assert.deepEqual(
+    parsed.agents?.map((agent) => `${agent.instance?.state}:${agent.agentId}`),
+    [
+      "running:11111111-1111-4111-8111-111111111111",
+      "running:22222222-2222-4222-8222-222222222222",
+      "stopped:33333333-3333-4333-8333-333333333333",
+    ],
+  );
+});
+
+test("cs-agent-mcp agents status resolves hidden full ids and fails closed for prefixes with corrupt snapshots", async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "cs-agent-mcp-agents-status-"));
+  t.after(async () => await fs.rm(home, { recursive: true, force: true }));
+  const snapshotPath = await writeDiagnosticSnapshot(
+    home,
+    "cccccccccccccccccccccccc",
+    diagnosticSnapshot({
+      "44444444-4444-4444-8444-444444444444": diagnosticAgent({
+        agentId: "44444444-4444-4444-8444-444444444444",
+        state: "destroyed",
+      }),
+    }),
+  );
+  await writeRunningLock(snapshotPath);
+  await fs.writeFile(
+    path.join(path.dirname(snapshotPath), "dddddddddddddddddddddddd.json"),
+    "{not-json",
+    "utf8",
+  );
+
+  const full = await runCli(
+    ["agents", "status", "44444444-4444-4444-8444-444444444444", "--json"],
+    { HOME: home },
+  );
+  assert.equal(full.code, 0);
+  assert.match(full.stderr, /warning/i);
+  const parsed = JSON.parse(full.stdout) as { agent?: { agentId?: string; state?: string } };
+  assert.equal(parsed.agent?.agentId, "44444444-4444-4444-8444-444444444444");
+  assert.equal(parsed.agent?.state, "destroyed");
+
+  const prefix = await runCli(["agents", "status", "44444444"], { HOME: home });
+  assert.equal(prefix.code, 1);
+  assert.match(prefix.stderr, /complete agent id/i);
 });
 
 test("cs-agent-mcp serves the facade over stdio", async (t) => {
