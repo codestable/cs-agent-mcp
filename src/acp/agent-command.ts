@@ -5,6 +5,7 @@ import {
   buildSpawnCommandOptions,
   readWindowsEnvValue,
   resolvePosixExecutablePath,
+  resolveWindowsCommand,
   resolveWindowsExecutablePath,
 } from "../spawn-command-options.js";
 import { type AcpClientOptions } from "../types.js";
@@ -400,4 +401,29 @@ function resolvePosixClaudeCodeExecutable(env: NodeJS.ProcessEnv): string | unde
     .filter((entry): entry is string => !!entry)
     .join(path.posix.delimiter);
   return resolvePosixExecutablePath("claude", { ...env, PATH: searchPath });
+}
+
+export function resolveCodexExecutable(
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  if (hasConfiguredCodexExecutable(platform, env)) {
+    return undefined;
+  }
+  return platform === "win32"
+    ? resolveWindowsCommand("codex", env)
+    : resolvePosixCodexExecutable(env);
+}
+
+function hasConfiguredCodexExecutable(platform: NodeJS.Platform, env: NodeJS.ProcessEnv): boolean {
+  const executable = platform === "win32" ? readWindowsEnvValue(env, "CODEX_PATH") : env.CODEX_PATH;
+  return !!executable?.trim();
+}
+
+function resolvePosixCodexExecutable(env: NodeJS.ProcessEnv): string | undefined {
+  const userBin = env.HOME?.trim() ? path.join(env.HOME, ".local", "bin") : undefined;
+  const searchPath = [userBin, env.PATH]
+    .filter((entry): entry is string => !!entry)
+    .join(path.posix.delimiter);
+  return resolvePosixExecutablePath("codex", { ...env, PATH: searchPath });
 }

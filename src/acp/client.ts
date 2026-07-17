@@ -79,6 +79,7 @@ import {
   resolveClaudeAcpSessionCreateTimeoutMs,
   resolveClaudeCodeExecutable,
   resolveClaudeCodeSettingSources,
+  resolveCodexExecutable,
   resolveGeminiAcpStartupTimeoutMs,
   resolveGeminiCommandArgs,
   shouldIgnoreNonJsonAgentOutputLine,
@@ -98,6 +99,7 @@ import {
   waitForChildExit,
   waitForSpawn,
 } from "./client-process.js";
+import { isCodexAcpCommand } from "./codex-compat.js";
 import { extractAcpError } from "./error-shapes.js";
 import { isAcpMessageObject, isSessionUpdateNotification } from "./jsonrpc.js";
 import {
@@ -249,6 +251,7 @@ type AgentLaunchPlan = {
   geminiAcp: boolean;
   copilotAcp: boolean;
   claudeAcp: boolean;
+  codexAcp: boolean;
   spawnOptions: ReturnType<typeof buildAgentSpawnOptions>;
 };
 
@@ -668,6 +671,7 @@ export class AcpClient {
       geminiAcp: isGeminiAcpCommand(spawnCommand, args),
       copilotAcp: isCopilotAcpCommand(spawnCommand, args),
       claudeAcp: isClaudeAcpCommand(spawnCommand, args),
+      codexAcp: isCodexAcpCommand(spawnCommand, args),
       spawnOptions: buildAgentSpawnOptions(
         this.options.cwd,
         this.options.authCredentials,
@@ -696,6 +700,13 @@ export class AcpClient {
   private async ensureLaunchSupport(plan: AgentLaunchPlan): Promise<void> {
     if (plan.copilotAcp) {
       await ensureCopilotAcpSupport(plan.spawnCommand);
+    }
+    if (plan.codexAcp) {
+      const codexExe = resolveCodexExecutable(process.platform, plan.spawnOptions.env);
+      if (codexExe) {
+        plan.spawnOptions.env.CODEX_PATH = codexExe;
+        this.log(`resolved system Codex executable: ${codexExe}`);
+      }
     }
     if (!plan.claudeAcp) {
       return;

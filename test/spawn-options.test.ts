@@ -4,10 +4,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { resolveClaudeCodeExecutable } from "../src/acp/agent-command.js";
+import { resolveClaudeCodeExecutable, resolveCodexExecutable } from "../src/acp/agent-command.js";
 import { resolveAgentSessionCwd } from "../src/acp/client-process.js";
-import { buildAgentSpawnOptions, buildSpawnCommandOptions } from "../src/acp/client.js";
+import { AcpClient, buildAgentSpawnOptions, buildSpawnCommandOptions } from "../src/acp/client.js";
 import { buildTerminalSpawnOptions } from "../src/acp/terminal-manager.js";
+import { AGENT_REGISTRY } from "../src/agent-registry.js";
 import { buildQueueOwnerSpawnOptions } from "../src/cli/session/queue-owner-process.js";
 import {
   buildTerminalShellSpawnCommand,
@@ -25,6 +26,23 @@ function withPlatform<T>(platform: NodeJS.Platform, callback: () => T): T {
       Object.defineProperty(process, "platform", descriptor);
     }
   }
+}
+
+type TestAgentLaunchPlan = {
+  spawnCommand: string;
+  copilotAcp: boolean;
+  claudeAcp: boolean;
+  codexAcp: boolean;
+  spawnOptions: ReturnType<typeof buildAgentSpawnOptions>;
+};
+
+type AcpClientLaunchInternals = {
+  resolveAgentLaunchPlan: () => Promise<TestAgentLaunchPlan>;
+  ensureLaunchSupport: (plan: TestAgentLaunchPlan) => Promise<void>;
+};
+
+function asLaunchInternals(client: AcpClient): AcpClientLaunchInternals {
+  return client as unknown as AcpClientLaunchInternals;
 }
 
 test("buildAgentSpawnOptions merges session env into the agent child environment", () => {
@@ -655,4 +673,177 @@ test("resolveClaudeCodeExecutable returns undefined when claude is not on PATH",
   const env = { PATH: "/nonexistent", PATHEXT: ".COM;.EXE;.BAT;.CMD" } as NodeJS.ProcessEnv;
   const result = resolveClaudeCodeExecutable("win32", env);
   assert.equal(result, undefined);
+});
+
+test("resolveCodexExecutable finds an executable Codex CLI on POSIX PATH", async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "acpx-codex-cli-"));
+  const executable = path.join(tempDir, "codex");
+  try {
+    await fs.writeFile(executable, "#!/bin/sh\n", { mode: 0o755 });
+
+    assert.equal(resolveCodexExecutable("darwin", { PATH: tempDir }), executable);
+    assert.equal(resolveCodexExecutable("linux", { PATH: tempDir }), executable);
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("resolveCodexExecutable prefers the POSIX user install over PATH", async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "acpx-codex-cli-"));
+  const homeDir = path.join(tempDir, "home");
+  const localExecutable = path.join(homeDir, ".local", "bin", "codex");
+  const pathDir = path.join(tempDir, "path-bin");
+  try {
+    await fs.mkdir(path.dirname(localExecutable), { recursive: true });
+    await fs.mkdir(pathDir);
+    await fs.writeFile(localExecutable, "#!/bin/sh\n", { mode: 0o755 });
+    await fs.writeFile(path.join(pathDir, "codex"), "#!/bin/sh\n", { mode: 0o755 });
+
+    assert.equal(
+      resolveCodexExecutable("darwin", { HOME: homeDir, PATH: pathDir }),
+      localExecutable,
+    );
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("resolveCodexExecutable accepts Windows command shims and native executables", async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "acpx-codex-exe-"));
+  const shimDir = path.join(tempDir, "shim");
+  const nativeDir = path.join(tempDir, "native");
+  try {
+    await fs.mkdir(shimDir);
+    await fs.mkdir(nativeDir);
+    const shim = path.join(shimDir, "codex.cmd");
+    const executable = path.join(nativeDir, "codex.exe");
+    await fs.writeFile(shim, "@echo off\r\n");
+    await fs.writeFile(executable, "");
+
+    assert.equal(
+      resolveCodexExecutable("win32", {
+        PATH: shimDir,
+        PATHEXT: ".CMD;.EXE;.BAT",
+      }),
+      shim,
+    );
+    assert.equal(
+      resolveCodexExecutable("win32", {
+        PATH: nativeDir,
+        PATHEXT: ".CMD;.EXE;.BAT",
+      }),
+      executable,
+    );
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("resolveCodexExecutable preserves an explicit CODEX_PATH", async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "acpx-codex-cli-"));
+  try {
+    await fs.writeFile(path.join(tempDir, "codex"), "#!/bin/sh\n", { mode: 0o755 });
+    await fs.writeFile(path.join(tempDir, "codex.exe"), "");
+
+    assert.equal(
+      resolveCodexExecutable("darwin", {
+        PATH: tempDir,
+        CODEX_PATH: "/custom/codex",
+      }),
+      undefined,
+    );
+    assert.equal(
+      resolveCodexExecutable("win32", {
+        PATH: tempDir,
+        PATHEXT: ".EXE;.CMD",
+        CODEX_PATH: "C:\\custom\\codex.exe",
+      }),
+      undefined,
+    );
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("resolveCodexExecutable respects case-insensitive CODEX_PATH on Windows", async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "acpx-codex-exe-"));
+  try {
+    await fs.writeFile(path.join(tempDir, "codex.cmd"), "@echo off\r\n");
+
+    assert.equal(
+      resolveCodexExecutable("win32", {
+        PATH: tempDir,
+        PATHEXT: ".CMD;.EXE;.BAT",
+        codex_path: "C:\\custom\\codex.cmd",
+      }),
+      undefined,
+    );
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("AcpClient injects the resolved CODEX_PATH into built-in Codex ACP launches", async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "acpx-codex-launch-"));
+  const homeDir = path.join(tempDir, "home");
+  const executable = path.join(homeDir, ".local", "bin", "codex");
+  const previousCodexPath = process.env.CODEX_PATH;
+  delete process.env.CODEX_PATH;
+
+  try {
+    await fs.mkdir(path.dirname(executable), { recursive: true });
+    await fs.writeFile(executable, "#!/bin/sh\n", { mode: 0o755 });
+    const client = asLaunchInternals(
+      new AcpClient({
+        agentCommand: AGENT_REGISTRY.codex,
+        cwd: tempDir,
+        permissionMode: "approve-reads",
+        sessionOptions: { env: { HOME: homeDir, PATH: "/nonexistent" } },
+      }),
+    );
+
+    const plan = await client.resolveAgentLaunchPlan();
+    assert.equal(plan.codexAcp, true);
+    assert.equal(plan.spawnOptions.env.CODEX_PATH, undefined);
+
+    await client.ensureLaunchSupport(plan);
+    assert.equal(plan.spawnOptions.env.CODEX_PATH, executable);
+  } finally {
+    if (previousCodexPath == null) {
+      delete process.env.CODEX_PATH;
+    } else {
+      process.env.CODEX_PATH = previousCodexPath;
+    }
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("AcpClient preserves an explicit CODEX_PATH for built-in Codex ACP launches", async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "acpx-codex-launch-"));
+  const homeDir = path.join(tempDir, "home");
+  const executable = path.join(homeDir, ".local", "bin", "codex");
+  const explicitPath = "/custom/codex";
+
+  try {
+    await fs.mkdir(path.dirname(executable), { recursive: true });
+    await fs.writeFile(executable, "#!/bin/sh\n", { mode: 0o755 });
+    const client = asLaunchInternals(
+      new AcpClient({
+        agentCommand: AGENT_REGISTRY.codex,
+        cwd: tempDir,
+        permissionMode: "approve-reads",
+        sessionOptions: {
+          env: { HOME: homeDir, PATH: "/nonexistent", CODEX_PATH: explicitPath },
+        },
+      }),
+    );
+
+    const plan = await client.resolveAgentLaunchPlan();
+    assert.equal(plan.codexAcp, true);
+
+    await client.ensureLaunchSupport(plan);
+    assert.equal(plan.spawnOptions.env.CODEX_PATH, explicitPath);
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
 });

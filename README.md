@@ -23,10 +23,11 @@ cs-agent-mcp --version
 npx -y cs-agent-mcp --version
 ```
 
-无需安装 Claude 桌面应用，也无需为 MCP 再登录一次。Claude 子 Agent 会优先使用本机
-`claude` 可执行文件和现有用户设置；Codex、Claude 都沿用当前用户已有的登录状态。首次调用
-某个 Agent 时，如果对应 ACP 适配器尚未缓存，npm 可能下载适配器及其 SDK。这只是本地协议桥，
-不是重新安装 Claude/Codex，也不需要手工配置适配器路径、端口或令牌。
+无需安装 Claude 桌面应用，也无需为 MCP 再登录一次。Codex 和 Claude 子 Agent 会优先使用
+本机 `codex`、`claude` 可执行文件，并沿用当前用户已有的登录状态；Claude 还会复用现有用户
+设置。已显式设置的 `CODEX_PATH` 或 `CLAUDE_CODE_EXECUTABLE` 不会被覆盖。首次调用某个 Agent
+时，如果对应 ACP 适配器尚未缓存，npm 可能下载适配器及其 SDK。这只是本地协议桥，不是重新
+安装 Claude/Codex，也不需要手工配置适配器路径、端口或令牌。
 
 ## 配置
 

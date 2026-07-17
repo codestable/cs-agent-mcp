@@ -1,6 +1,6 @@
 {
   "name": "cs-agent-mcp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "通过 MCP 统一创建、调用和编排本机 Codex、Claude 等编码 Agent",
   "keywords": [
     "acp",
