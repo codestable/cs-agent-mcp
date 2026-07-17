@@ -37,7 +37,6 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
-          registry-url: https://registry.npmjs.org
 
       - name: 安装依赖
         run: pnpm install --frozen-lockfile
@@ -113,4 +112,4 @@ jobs:
 
       - name: 发布到 npm
         if: steps.published.outputs.skip != 'true'
-        run: npm publish --access public --provenance
+        run: npm publish --access public --provenance --loglevel verbose
