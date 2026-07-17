@@ -2,6 +2,13 @@
 
 本文件记录 `cs-agent-mcp` 的用户可见变更。
 
+## 未发布
+
+### 错误处理
+
+- Claude 达到显式 `sessionOptions.maxTurns` 上限时返回可识别的 `MAX_TURNS_EXCEEDED` 错误和
+  恢复建议，不再将该配置边界仅报告为通用内部错误。
+
 ## 0.1.1 - 2026-07-17
 
 ### 修复

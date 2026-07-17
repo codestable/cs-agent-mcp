@@ -2403,6 +2403,12 @@ test("AcpRuntimeManager surfaces normalized prompt failures", async () => {
     cwd: "/workspace",
   });
   const store = new InMemorySessionStore([record]);
+  let promptError: unknown = new AcpxOperationalError("prompt exploded", {
+    outputCode: "RUNTIME",
+    detailCode: "AGENT_DISCONNECTED",
+    origin: "acp",
+    retryable: true,
+  });
   const manager = new AcpRuntimeManager(
     createRuntimeOptions({ cwd: "/workspace", sessionStore: store }),
     {
@@ -2418,12 +2424,7 @@ test("AcpRuntimeManager surfaces normalized prompt failures", async () => {
           loadSessionWithOptions: async () => ({ agentSessionId: "unused" }),
           getAgentLifecycleSnapshot: () => ({ running: true }),
           prompt: async () => {
-            throw new AcpxOperationalError("prompt exploded", {
-              outputCode: "RUNTIME",
-              detailCode: "AGENT_DISCONNECTED",
-              origin: "acp",
-              retryable: true,
-            });
+            throw promptError;
           },
           requestCancelActivePrompt: async () => false,
           hasActivePrompt: () => false,
@@ -2472,6 +2473,26 @@ test("AcpRuntimeManager surfaces normalized prompt failures", async () => {
       retryable: true,
     },
   ]);
+
+  promptError = Object.assign(new Error("Internal error"), {
+    code: -32603,
+    data: { details: "Reached maximum number of turns (2)" },
+  });
+  const maxTurnsFailure = manager.startTurn({
+    handle: createHandle("error-session"),
+    text: "review the repository",
+    mode: "prompt",
+    sessionMode: "persistent",
+    requestId: "req-max-turns",
+  });
+  const maxTurnsResult = await collectTurn(maxTurnsFailure);
+
+  assert.deepEqual(maxTurnsResult.events, []);
+  assert.equal(maxTurnsResult.result.status, "failed");
+  assert.equal(maxTurnsResult.result.error?.code, "RUNTIME");
+  assert.equal(maxTurnsResult.result.error?.detailCode, "MAX_TURNS_EXCEEDED");
+  assert.equal(maxTurnsResult.result.error?.retryable, false);
+  assert.match(maxTurnsResult.result.error?.message ?? "", /sessionOptions\.maxTurns/);
 });
 
 test("AcpRuntimeManager rejects unsupported runtime attachment media types", async () => {

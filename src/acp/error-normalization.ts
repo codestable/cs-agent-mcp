@@ -20,6 +20,11 @@ import {
 
 const AUTH_REQUIRED_ACP_CODES = new Set([-32000]);
 const QUERY_CLOSED_BEFORE_RESPONSE_DETAIL = "query closed before response received";
+const MAX_TURNS_EXCEEDED_DETAIL_CODE = "MAX_TURNS_EXCEEDED";
+const MAX_TURNS_EXCEEDED_SUBTYPE = "error_max_turns";
+const MAX_TURNS_EXCEEDED_MESSAGE_PATTERN =
+  /reached maximum number of turns(?:\s*\(\s*(\d{1,5})\s*\))?/i;
+const MAX_TURNS_EXCEEDED_FIELDS = ["message", "details", "subtype", "type", "errors"] as const;
 
 type ErrorMeta = {
   outputCode?: OutputErrorCode;
@@ -153,6 +158,137 @@ function isUsageLike(error: unknown): boolean {
   );
 }
 
+function readKnownField(record: Record<string, unknown>, key: string): unknown {
+  try {
+    return record[key];
+  } catch {
+    return undefined;
+  }
+}
+
+function maxTurnsExceededText(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.toLowerCase();
+  const messageMatch = MAX_TURNS_EXCEEDED_MESSAGE_PATTERN.exec(value);
+  if (messageMatch) {
+    const configuredTurns = messageMatch[1];
+    return configuredTurns
+      ? `Reached maximum number of turns (${configuredTurns})`
+      : "Reached maximum number of turns";
+  }
+  return normalized.includes(MAX_TURNS_EXCEEDED_SUBTYPE)
+    ? "Reached maximum number of turns"
+    : undefined;
+}
+
+function findMaxTurnsExceededInKnownValue(value: unknown, depth = 0): string | undefined {
+  const direct = maxTurnsExceededText(value);
+  if (direct || depth > 4) {
+    return direct;
+  }
+  if (Array.isArray(value)) {
+    return findMaxTurnsExceededInEntries(value, depth);
+  }
+  const record = asRecord(value);
+  return record ? findMaxTurnsExceededInRecord(record, depth) : undefined;
+}
+
+function findMaxTurnsExceededInEntries(entries: unknown[], depth: number): string | undefined {
+  for (const entry of entries) {
+    const hint = findMaxTurnsExceededInKnownValue(entry, depth + 1);
+    if (hint) {
+      return hint;
+    }
+  }
+  return undefined;
+}
+
+function findMaxTurnsExceededInRecord(
+  record: Record<string, unknown>,
+  depth: number,
+): string | undefined {
+  for (const field of MAX_TURNS_EXCEEDED_FIELDS) {
+    const hint = findMaxTurnsExceededInKnownValue(readKnownField(record, field), depth + 1);
+    if (hint) {
+      return hint;
+    }
+  }
+  return undefined;
+}
+
+function findMaxTurnsExceededHint(
+  error: unknown,
+  acp: OutputErrorAcpPayload | undefined,
+): string | undefined {
+  const errorRecord = asRecord(error);
+  const topLevelHint = errorRecord
+    ? findMaxTurnsExceededInKnownValue({
+        message: readKnownField(errorRecord, "message"),
+        subtype: readKnownField(errorRecord, "subtype"),
+        type: readKnownField(errorRecord, "type"),
+        errors: readKnownField(errorRecord, "errors"),
+      })
+    : maxTurnsExceededText(error);
+  if (topLevelHint || !acp) {
+    return topLevelHint;
+  }
+
+  const data = asRecord(acp.data);
+  return (
+    maxTurnsExceededText(acp.message) ??
+    (data
+      ? findMaxTurnsExceededInKnownValue({
+          details: readKnownField(data, "details"),
+          subtype: readKnownField(data, "subtype"),
+          type: readKnownField(data, "type"),
+          errors: readKnownField(data, "errors"),
+        })
+      : undefined)
+  );
+}
+
+function hasCompleteExplicitSemantics(
+  meta: ErrorMeta,
+  options: NormalizeOutputErrorOptions,
+): boolean {
+  return (
+    (meta.detailCode ?? options.detailCode) !== undefined &&
+    (meta.retryable ?? options.retryable) !== undefined
+  );
+}
+
+function resolveNormalizedErrorMessage(error: unknown, maxTurnsExceededHint: string | undefined) {
+  return maxTurnsExceededHint
+    ? formatMaxTurnsExceededMessage(maxTurnsExceededHint)
+    : formatErrorMessage(error);
+}
+
+function resolveNormalizedRetryable(
+  meta: ErrorMeta,
+  options: NormalizeOutputErrorOptions,
+  maxTurnsExceeded: boolean,
+): boolean | undefined {
+  if (maxTurnsExceeded) {
+    return false;
+  }
+  if (meta.retryable !== undefined) {
+    return meta.retryable;
+  }
+  if (options.retryable !== undefined) {
+    return options.retryable;
+  }
+  return undefined;
+}
+
+function formatMaxTurnsExceededMessage(hint: string): string {
+  return (
+    "The agent reached its configured sessionOptions.maxTurns before completing the task " +
+    `(${hint}). Create a new agent with a higher value or omit it.`
+  );
+}
+
 export function formatErrorMessage(error: unknown): string {
   return formatUnknownErrorMessage(error);
 }
@@ -200,12 +336,16 @@ export function normalizeOutputError(
   const meta = readOutputErrorMeta(error);
   const code = resolveOutputErrorCode(error, options, meta);
   const acp = options.acp ?? meta.acp ?? extractAcpError(error);
+  const maxTurnsExceededHint =
+    code === "RUNTIME" && !hasCompleteExplicitSemantics(meta, options)
+      ? findMaxTurnsExceededHint(error, acp)
+      : undefined;
   return {
     code,
-    message: formatErrorMessage(error),
-    detailCode: resolveDetailCode(error, acp, options, meta),
+    message: resolveNormalizedErrorMessage(error, maxTurnsExceededHint),
+    detailCode: resolveDetailCode(error, acp, options, meta, Boolean(maxTurnsExceededHint)),
     origin: meta.origin ?? options.origin,
-    retryable: meta.retryable ?? options.retryable,
+    retryable: resolveNormalizedRetryable(meta, options, Boolean(maxTurnsExceededHint)),
     acp,
   };
 }
@@ -227,8 +367,10 @@ function resolveDetailCode(
   acp: OutputErrorAcpPayload | undefined,
   options: NormalizeOutputErrorOptions,
   meta: ErrorMeta,
+  maxTurnsExceeded: boolean,
 ): string | undefined {
   return (
+    (maxTurnsExceeded ? MAX_TURNS_EXCEEDED_DETAIL_CODE : undefined) ??
     meta.detailCode ??
     options.detailCode ??
     (error instanceof AuthPolicyError || isAcpAuthRequiredPayload(acp)
@@ -246,12 +388,20 @@ function resolveDetailCode(
  * invalid params, timeout, permission) return false.
  */
 export function isRetryablePromptError(error: unknown): boolean {
-  if (isNonRetryablePromptError(error)) {
+  const normalized = normalizeOutputError(error);
+  if (
+    normalized.code !== "RUNTIME" ||
+    normalized.detailCode === "AUTH_REQUIRED" ||
+    isNonRetryablePromptError(error)
+  ) {
     return false;
   }
 
-  // Extract ACP payload once and reuse for all subsequent checks.
-  const acp = extractAcpError(error);
+  if (normalized.retryable !== undefined) {
+    return normalized.retryable;
+  }
+
+  const acp = normalized.acp;
   if (!acp) {
     // Non-ACP errors (e.g. process crash) are not retried at the prompt level.
     return false;

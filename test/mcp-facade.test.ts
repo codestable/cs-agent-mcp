@@ -81,6 +81,25 @@ class FakeAgentRuntime implements AgentRuntimeAdapter {
   }
 }
 
+class MaxTurnsFailedAgentRuntime extends FakeAgentRuntime {
+  override startTurn(input: StartRuntimeTurnInput): RuntimeTurn {
+    this.started.push(input);
+    return {
+      events: (async function* (): AsyncIterable<AcpRuntimeEvent> {})(),
+      result: Promise.resolve({
+        status: "failed",
+        error: {
+          code: "RUNTIME",
+          detailCode: "MAX_TURNS_EXCEEDED",
+          message: "The agent reached its configured sessionOptions.maxTurns",
+          retryable: false,
+        },
+      }),
+      cancel: async () => {},
+    };
+  }
+}
+
 class ControlledAgentRuntime extends FakeAgentRuntime {
   readonly completions: Array<(result: AcpRuntimeTurnResult) => void> = [];
   readonly cancellations: string[] = [];
@@ -1054,6 +1073,54 @@ test("MCP server exposes all facade tools and returns structured create results"
     ],
   );
   assert.deepEqual(structured.agent, { ...structured.agent, agent: "claude", state: "idle" });
+});
+
+test("Facade exposes max-turn failures consistently through state, events, and MCP", async (t) => {
+  const runtime = new MaxTurnsFailedAgentRuntime();
+  const { facade } = createHarness(runtime);
+  const root = await facade.bootstrapRoot({ agent: "codex", cwd: TEST_WORKSPACE });
+  const actor: FacadeActor = { rootExecutionId: root.rootExecutionId, agentId: root.agentId };
+  const child = await facade.createAgent({ agent: "claude" }, actor);
+  const receipt = await facade.send(
+    { agentId: child.agentId, content: "review", idempotencyKey: "max-turn-contract" },
+    actor,
+  );
+  const turn = await waitForTerminalTurn(facade, actor, receipt.turnId);
+  const expectedError = {
+    code: "MAX_TURNS_EXCEEDED",
+    message: "The agent reached its configured sessionOptions.maxTurns",
+    retryable: false,
+    details: { runtimeCode: "RUNTIME" },
+  };
+
+  assert.equal(turn.state, "failed");
+  assert.deepEqual(turn.error, expectedError);
+  const status = await facade.status({ agentId: child.agentId }, actor);
+  assert.deepEqual(status.agent.lastError, expectedError);
+  const events = await facade.events({ afterCursor: "0", limit: 1_000 }, actor);
+  const failedEvent = events.events.find(
+    (event) => event.type === "turn.failed" && event.turnId === receipt.turnId,
+  );
+  assert.deepEqual((failedEvent?.data as { error?: unknown } | undefined)?.error, expectedError);
+
+  const server = createFacadeMcpServer({ facade, actor });
+  const client = new Client({ name: "max-turn-contract-test", version: "1.0.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  t.after(async () => {
+    await client.close();
+    await server.close();
+  });
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+
+  const toolResult = await client.callTool({
+    name: "cs_agent_get_turn",
+    arguments: { turnId: receipt.turnId },
+  });
+  const toolContent = toolResult.structuredContent as {
+    turn?: { error?: typeof expectedError };
+  };
+  assert.deepEqual(toolContent.turn?.error, expectedError);
 });
 
 test("MCP tools preserve facade errors, correlations, bounded waits, cursors, and lifecycle", async (t) => {

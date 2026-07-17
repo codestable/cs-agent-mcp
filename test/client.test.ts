@@ -12,6 +12,7 @@ import {
   resolveAgentCloseAfterStdinEndMs,
   shouldIgnoreNonJsonAgentOutputLine,
 } from "../src/acp/client.js";
+import { isRetryablePromptError, normalizeOutputError } from "../src/acp/error-normalization.js";
 import {
   AgentDisconnectedError,
   AgentStartupError,
@@ -32,6 +33,105 @@ test("parseAcpJsonMessageLine preserves object-shaped protocol values", () => {
     jsonrpc: "2.0",
     method: "session/update",
   });
+});
+
+test("normalizeOutputError classifies Claude max-turn exhaustion with remediation", () => {
+  const normalized = normalizeOutputError(
+    new Error("Internal error: Reached maximum number of turns (2)"),
+    { origin: "runtime" },
+  );
+
+  assert.equal(normalized.code, "RUNTIME");
+  assert.equal(normalized.detailCode, "MAX_TURNS_EXCEEDED");
+  assert.equal(normalized.retryable, false);
+  assert.match(normalized.message, /sessionOptions\.maxTurns/);
+  assert.match(normalized.message, /higher value or omit it/);
+});
+
+test("isRetryablePromptError does not retry ACP max-turn exhaustion", () => {
+  const error = Object.assign(new Error("Internal error"), {
+    code: -32603,
+    data: { details: "Reached maximum number of turns (2)" },
+  });
+
+  assert.equal(isRetryablePromptError(error), false);
+  assert.equal(normalizeOutputError(error).detailCode, "MAX_TURNS_EXCEEDED");
+});
+
+test("normalizeOutputError recognizes a max-turn subtype without a message", () => {
+  const error = Object.assign(new Error("Internal error"), {
+    code: -32603,
+    data: { subtype: "error_max_turns" },
+  });
+
+  const normalized = normalizeOutputError(error);
+
+  assert.equal(normalized.detailCode, "MAX_TURNS_EXCEEDED");
+  assert.equal(normalized.retryable, false);
+  assert.match(normalized.message, /\(Reached maximum number of turns\)/);
+  assert.doesNotMatch(normalized.message, /error_max_turns/);
+});
+
+test("normalizeOutputError ignores max-turn text in request context and unsafe getters", () => {
+  const data = {
+    request: { prompt: "Explain: Reached maximum number of turns (2)" },
+  };
+  const error = Object.assign(new Error("Internal error"), { code: -32603, data });
+  Object.defineProperty(error, "unrelated", {
+    enumerable: true,
+    get: () => {
+      throw new Error("unsafe getter");
+    },
+  });
+
+  const normalized = normalizeOutputError(error);
+
+  assert.equal(normalized.detailCode, undefined);
+  assert.equal(normalized.retryable, undefined);
+  assert.equal(normalized.message, "Internal error");
+  assert.equal(isRetryablePromptError(error), true);
+});
+
+test("normalizeOutputError keeps complete explicit semantics ahead of max-turn inference", () => {
+  const error = Object.assign(new Error("Reached maximum number of turns (2)"), {
+    code: -32603,
+    detailCode: "UPSTREAM_INTERNAL",
+    retryable: true,
+  });
+
+  const normalized = normalizeOutputError(error);
+
+  assert.equal(normalized.detailCode, "UPSTREAM_INTERNAL");
+  assert.equal(normalized.retryable, true);
+  assert.equal(normalized.message, "Reached maximum number of turns (2)");
+  assert.equal(isRetryablePromptError(error), true);
+});
+
+test("normalizeOutputError applies inferred max-turn semantics atomically", () => {
+  const error = Object.assign(
+    new Error(`Reached maximum number of turns (12)\n${"x".repeat(1_000)}`),
+    { detailCode: "PARTIAL_CLASSIFICATION" },
+  );
+
+  const normalized = normalizeOutputError(error);
+
+  assert.equal(normalized.detailCode, "MAX_TURNS_EXCEEDED");
+  assert.equal(normalized.retryable, false);
+  assert.equal(
+    normalized.message,
+    "The agent reached its configured sessionOptions.maxTurns before completing the task " +
+      "(Reached maximum number of turns (12)). Create a new agent with a higher value or omit it.",
+  );
+});
+
+test("isRetryablePromptError respects a normalized non-runtime code", () => {
+  const error = Object.assign(new Error("Internal error"), {
+    outputCode: "NO_SESSION",
+    code: -32603,
+  });
+
+  assert.equal(normalizeOutputError(error).code, "NO_SESSION");
+  assert.equal(isRetryablePromptError(error), false);
 });
 
 type ClientInternals = {

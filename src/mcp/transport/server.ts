@@ -53,7 +53,16 @@ const sessionOptionsSchema = z.object({
     .union([z.string().max(100_000), z.object({ append: z.string().max(100_000) })])
     .optional(),
   allowedTools: z.array(z.string().min(1).max(256)).max(512).optional(),
-  maxTurns: z.number().int().positive().max(10_000).optional(),
+  maxTurns: z
+    .number()
+    .int()
+    .positive()
+    .max(10_000)
+    .describe(
+      "Maximum agentic turns for one task, not the number of Facade Turns. " +
+        "Tool-heavy tasks often need 8-12; omit this field to use the agent adapter default.",
+    )
+    .optional(),
 });
 
 export function createFacadeMcpServer(options: FacadeMcpServerOptions): McpServer {

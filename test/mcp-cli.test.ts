@@ -33,6 +33,19 @@ test("cs-agent-mcp serves the facade over stdio", async (t) => {
 
   assert.equal(tools.tools.length, 13);
   assert.equal(tools.tools[0]?.name, "cs_agent_capabilities");
+  const createTool = tools.tools.find((tool) => tool.name === "cs_agent_create");
+  const createSchema = createTool?.inputSchema as {
+    properties?: {
+      sessionOptions?: {
+        properties?: { maxTurns?: { description?: string } };
+      };
+    };
+  };
+  const maxTurnsDescription =
+    createSchema.properties?.sessionOptions?.properties?.maxTurns?.description ?? "";
+  assert.match(maxTurnsDescription, /agentic turns/);
+  assert.match(maxTurnsDescription, /8-12/);
+  assert.match(maxTurnsDescription, /omit/);
 });
 
 test("cs-agent-mcp honors one MCP workspace root and requires cwd when roots are ambiguous", async (t) => {

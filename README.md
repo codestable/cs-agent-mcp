@@ -188,6 +188,10 @@ Turn 或销毁 Agent。
 `idempotencyKey` 在同一调用者范围内全局去重；重试同一任务时应复用原键，向不同 Agent
 发送任务时也必须使用不同的键。
 
+`maxTurns` 限制的是一个任务在 Agent 内部可使用的 agentic turns，不是 Facade Turn 数量。代码
+审查等工具调用较多的任务通常需要 `8-12`；没有严格预算时建议省略并使用适配器默认值。达到
+上限时 Turn 会保持 `failed`，返回 `MAX_TURNS_EXCEEDED`，且不会自动提高限制或重试任务。
+
 `persistent` 模式要求服务重启后恢复原 ACP 会话，无法恢复时明确失败；`oneshot` 模式允许
 底层运行时在原会话不可用时建立新会话，因此不承诺跨重连保留上下文。两种模式下的 Facade
 Agent 都可以接收多个串行 Turn，直到祖先调用 `cs_agent_destroy`。受管 Agent 不能销毁自己。
