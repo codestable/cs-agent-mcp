@@ -18,5 +18,5 @@ ledger:
     evidence: "pnpm run check: 198/198 tests passed; issue and approved design committed separately"
   - step_id: S1
     status: done
-    commit_range: "27452e2"
+    commit_range: "323b029..af3166a"
     evidence: "RED: pnpm run build:test && node --test dist-test/test/mcp-cli.test.js failed new agents --help assertion before implementation; GREEN: same command passed 10/10 tests; VERIFY: pnpm run build && node dist/mcp-cli.js --help && node dist/mcp-cli.js agents --help passed; cleanliness rg console.log|console.error|TODO|FIXME|XXX found no new matches"
