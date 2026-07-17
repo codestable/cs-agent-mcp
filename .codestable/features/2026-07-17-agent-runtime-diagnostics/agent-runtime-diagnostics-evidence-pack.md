@@ -9,8 +9,8 @@ stage: implementation
 
 ## 动了哪些文件
 
-本实现从基线 `23bd73868624ea843807a602ba550e1c803aa63d` 开始，S1-S5 分步提交。当前 S5
-待提交 diff 涉及：
+本实现从基线 `23bd73868624ea843807a602ba550e1c803aa63d` 开始，S1-S5 分步提交。S5 提交
+`253eb87` 涉及：
 
 - `.codestable/requirements/agent-runtime-diagnostics.md`
 - `.codestable/features/2026-07-17-agent-runtime-diagnostics/agent-runtime-diagnostics-checklist.yaml`
