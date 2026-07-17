@@ -1,0 +1,18 @@
+feature: "2026-07-17-agent-runtime-diagnostics"
+status: ready-to-dispatch
+baseline_ref: "23bd73868624ea843807a602ba550e1c803aa63d"
+stage: implementation
+driver_kind: none
+driver_id: ""
+handoff_reason: ""
+handoff_next: ""
+design: ".codestable/features/2026-07-17-agent-runtime-diagnostics/agent-runtime-diagnostics-design.md"
+checklist: ".codestable/features/2026-07-17-agent-runtime-diagnostics/agent-runtime-diagnostics-checklist.yaml"
+review: ".codestable/features/2026-07-17-agent-runtime-diagnostics/agent-runtime-diagnostics-review.md"
+qa: ".codestable/features/2026-07-17-agent-runtime-diagnostics/agent-runtime-diagnostics-qa.md"
+acceptance: ".codestable/features/2026-07-17-agent-runtime-diagnostics/agent-runtime-diagnostics-acceptance.md"
+ledger:
+  - step_id: S0
+    status: done
+    commit_range: "0f2ee7a,23bd738"
+    evidence: "pnpm run check: 198/198 tests passed; issue and approved design committed separately"
