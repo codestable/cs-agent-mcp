@@ -46,6 +46,45 @@ async function runCli(
   return { code, stdout, stderr };
 }
 
+async function runNode(
+  args: string[],
+  env: NodeJS.ProcessEnv = {},
+): Promise<{
+  code: number | null;
+  stdout: string;
+  stderr: string;
+}> {
+  const child = spawn(process.execPath, args, {
+    env: { ...process.env, ...env },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", (chunk: string) => {
+    stdout += chunk;
+  });
+  child.stderr.on("data", (chunk: string) => {
+    stderr += chunk;
+  });
+  const code = await new Promise<number | null>((resolve, reject) => {
+    child.on("error", reject);
+    child.on("exit", resolve);
+  });
+  return { code, stdout, stderr };
+}
+
+async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
+  const start = Date.now();
+  while (!predicate()) {
+    if (Date.now() - start > timeoutMs) {
+      throw new Error("Timed out waiting for condition");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 function diagnosticSnapshot(agents: FacadeSnapshot["agents"]): FacadeSnapshot {
   return {
     schema: "cs-agent-mcp.facade.v1",
@@ -101,6 +140,13 @@ async function writeRunningLock(snapshotPath: string): Promise<void> {
     `${JSON.stringify({ pid: process.pid, token: "test-token", createdAt: TEST_TIMESTAMP })}\n`,
     "utf8",
   );
+}
+
+function permissionWarningOnly(stderr: string): boolean {
+  return stderr
+    .split("\n")
+    .filter(Boolean)
+    .every((line) => /ExperimentalWarning.*Permission/.test(line));
 }
 
 test("cs-agent-mcp exposes agents diagnostics subcommands without starting stdio", async (t) => {
@@ -204,11 +250,178 @@ test("cs-agent-mcp agents status resolves hidden full ids and fails closed for p
   assert.match(prefix.stderr, /complete agent id/i);
 });
 
+test("cs-agent-mcp agents attach emits JSONL history and terminal exit codes", async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "cs-agent-mcp-agents-attach-"));
+  t.after(async () => await fs.rm(home, { recursive: true, force: true }));
+  const destroyedId = "66666666-6666-4666-8666-666666666666";
+  const stoppedId = "77777777-7777-4777-8777-777777777777";
+  const runningPath = await writeDiagnosticSnapshot(home, "eeeeeeeeeeeeeeeeeeeeeeee", {
+    ...diagnosticSnapshot({
+      [destroyedId]: diagnosticAgent({ agentId: destroyedId, state: "destroyed" }),
+    }),
+    events: [
+      {
+        cursor: "1",
+        rootExecutionId: "root-1",
+        type: "turn.text_delta",
+        agentId: destroyedId,
+        turnId: "turn-1",
+        timestamp: TEST_TIMESTAMP,
+        data: { stream: "output", text: "done" },
+      },
+    ],
+  });
+  await writeRunningLock(runningPath);
+  await writeDiagnosticSnapshot(
+    home,
+    "ffffffffffffffffffffffff",
+    diagnosticSnapshot({
+      [stoppedId]: diagnosticAgent({ agentId: stoppedId, state: "idle" }),
+    }),
+  );
+
+  const destroyed = await runCli(["agents", "attach", destroyedId, "--json"], { HOME: home });
+  assert.equal(destroyed.code, 0);
+  const destroyedLines = destroyed.stdout
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as { kind?: string; reason?: string });
+  assert.deepEqual(
+    destroyedLines.map((line) => line.kind),
+    ["snapshot", "event", "terminal"],
+  );
+  assert.equal(destroyedLines[2]?.reason, "agent_destroyed");
+
+  const stopped = await runCli(["agents", "attach", stoppedId, "--json"], { HOME: home });
+  assert.equal(stopped.code, 1);
+  const stoppedLines = stopped.stdout
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as { kind?: string; reason?: string });
+  assert.deepEqual(
+    stoppedLines.map((line) => line.kind),
+    ["snapshot", "terminal"],
+  );
+  assert.equal(stoppedLines[1]?.reason, "instance_stopped");
+});
+
+test("cs-agent-mcp agents attach follows under node read-only permissions", async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "cs-agent-mcp-agents-permission-"));
+  t.after(async () => await fs.rm(home, { recursive: true, force: true }));
+  const agentId = "88888888-8888-4888-8888-888888888888";
+  const snapshotPath = await writeDiagnosticSnapshot(home, "999999999999999999999999", {
+    ...diagnosticSnapshot({
+      [agentId]: diagnosticAgent({ agentId, state: "running" }),
+    }),
+    events: [],
+  });
+  await writeRunningLock(snapshotPath);
+
+  const child = spawn(
+    process.execPath,
+    [
+      "--permission",
+      "--allow-fs-read=*",
+      CLI_PATH,
+      "agents",
+      "attach",
+      agentId,
+      "--history",
+      "0",
+      "--json",
+    ],
+    { env: { ...process.env, HOME: home }, stdio: ["ignore", "pipe", "pipe"] },
+  );
+  t.after(() => child.kill("SIGTERM"));
+  let stdout = "";
+  let stderr = "";
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", (chunk: string) => {
+    stdout += chunk;
+  });
+  child.stderr.on("data", (chunk: string) => {
+    stderr += chunk;
+  });
+  await waitFor(() => stdout.includes('"kind":"snapshot"'));
+  const replacementPath = `${snapshotPath}.replacement`;
+  await fs.writeFile(
+    replacementPath,
+    `${JSON.stringify({
+      ...diagnosticSnapshot({
+        [agentId]: diagnosticAgent({ agentId, state: "destroyed" }),
+      }),
+      events: [
+        {
+          cursor: "1",
+          rootExecutionId: "root-1",
+          type: "agent.destroyed",
+          agentId,
+          timestamp: TEST_TIMESTAMP,
+          data: { state: "destroyed" },
+        },
+      ],
+    })}\n`,
+    "utf8",
+  );
+  await fs.rename(replacementPath, snapshotPath);
+  const code = await new Promise<number | null>((resolve, reject) => {
+    child.on("error", reject);
+    child.on("exit", resolve);
+  });
+  assert.equal(code, 0, `stdout:\n${stdout}\nstderr:\n${stderr}`);
+  assert.equal(permissionWarningOnly(stderr), true);
+  assert.match(stdout, /"kind":"event"/);
+  assert.match(stdout, /"reason":"agent_destroyed"/);
+
+  const denied = await runNode(
+    [
+      "--permission",
+      "--allow-fs-read=*",
+      "-e",
+      `require("node:fs").writeFileSync(${JSON.stringify(path.join(home, "denied.txt"))}, "x")`,
+    ],
+    {},
+  );
+  assert.notEqual(denied.code, 0);
+  assert.match(denied.stderr, /ERR_ACCESS_DENIED/);
+});
+
+test("cs-agent-mcp agents attach treats Ctrl-C as an interrupted terminal", async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "cs-agent-mcp-agents-interrupt-"));
+  t.after(async () => await fs.rm(home, { recursive: true, force: true }));
+  const agentId = "99999999-9999-4999-8999-999999999999";
+  const snapshotPath = await writeDiagnosticSnapshot(
+    home,
+    "121212121212121212121212",
+    diagnosticSnapshot({
+      [agentId]: diagnosticAgent({ agentId, state: "idle" }),
+    }),
+  );
+  await writeRunningLock(snapshotPath);
+  const child = spawn(process.execPath, [CLI_PATH, "agents", "attach", agentId, "--json"], {
+    env: { ...process.env, HOME: home },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stdout = "";
+  child.stdout.setEncoding("utf8");
+  child.stdout.on("data", (chunk: string) => {
+    stdout += chunk;
+  });
+  await waitFor(() => stdout.includes('"kind":"snapshot"'));
+  child.kill("SIGINT");
+  const code = await new Promise<number | null>((resolve, reject) => {
+    child.on("error", reject);
+    child.on("exit", resolve);
+  });
+  assert.equal(code, 0);
+  assert.match(stdout, /"reason":"interrupted"/);
+});
+
 test("cs-agent-mcp serves the facade over stdio", async (t) => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "cs-agent-mcp-cli-"));
   const workspace = path.join(home, "workspace");
   await fs.mkdir(workspace, { recursive: true });
-  t.after(async () => await fs.rm(home, { recursive: true, force: true }));
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [CLI_PATH, "--cwd", workspace],
@@ -216,7 +429,10 @@ test("cs-agent-mcp serves the facade over stdio", async (t) => {
     stderr: "pipe",
   });
   const client = new Client({ name: "cs-agent-mcp-cli-test", version: "1.0.0" });
-  t.after(async () => await client.close());
+  t.after(async () => {
+    await client.close();
+    await fs.rm(home, { recursive: true, force: true });
+  });
 
   await client.connect(transport);
   const tools = await client.listTools();

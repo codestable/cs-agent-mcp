@@ -49,6 +49,30 @@ async function writeJson(filePath: string, value: unknown): Promise<void> {
   await fs.writeFile(filePath, `${JSON.stringify(value)}\n`, "utf8");
 }
 
+async function nextWithTimeout<T>(
+  iterator: AsyncGenerator<T, number>,
+  timeoutMs: number,
+): Promise<IteratorResult<T, number> | "timeout"> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      iterator.next(),
+      new Promise<"timeout">((resolve) => {
+        timeout = setTimeout(() => resolve("timeout"), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+function assertTimelineValue<T>(result: IteratorResult<T, number>): T {
+  assert.equal(result.done, false);
+  return result.value;
+}
+
 test("agent diagnostics discovers precise snapshot files and maps instance/agent DTOs", async (t) => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "cs-agent-diagnostics-"));
   t.after(async () => await fs.rm(directory, { recursive: true, force: true }));
@@ -146,4 +170,74 @@ test("agent diagnostics resolves selectors across the full readable set and fail
   assert.equal(ambiguous.ok, false);
   assert.equal(ambiguous.ok ? "" : ambiguous.code, "AGENT_SELECTOR_UNSAFE");
   assert.match(ambiguous.ok ? "" : ambiguous.message, /complete agent id/i);
+});
+
+test("agent diagnostics attach drains cursor events before reporting an instance replacement", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "cs-agent-diagnostics-attach-"));
+  t.after(async () => await fs.rm(directory, { recursive: true, force: true }));
+  const instanceId = "eeeeeeeeeeeeeeeeeeeeeeee";
+  const agentId = "55555555-5555-4555-8555-555555555555";
+  const snapshotPath = path.join(directory, `${instanceId}.json`);
+  let token = "generation-one";
+  await writeJson(snapshotPath, {
+    ...snapshot({
+      [agentId]: agent({ agentId, state: "running" }),
+    }),
+    events: [
+      {
+        cursor: "1",
+        rootExecutionId: "root-1",
+        type: "turn.text_delta",
+        agentId,
+        turnId: "turn-1",
+        timestamp: now,
+        data: { stream: "output", text: "first" },
+      },
+    ],
+  });
+  const diagnostics = createAgentDiagnostics({
+    facadesDir: directory,
+    probeLock: async () => ({ state: "running", pid: 123, token, createdAt: now }),
+  });
+
+  const iterator = diagnostics.attachAgent(agentId, { history: 1 });
+  assert.equal(assertTimelineValue(await iterator.next()).kind, "snapshot");
+  assert.equal(assertTimelineValue(await iterator.next()).kind, "event");
+
+  const pending = iterator.next();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  await writeJson(snapshotPath, {
+    ...snapshot({
+      [agentId]: agent({ agentId, state: "running" }),
+    }),
+    events: [
+      {
+        cursor: "1",
+        rootExecutionId: "root-1",
+        type: "turn.text_delta",
+        agentId,
+        turnId: "turn-1",
+        timestamp: now,
+        data: { stream: "output", text: "first" },
+      },
+      {
+        cursor: "2",
+        rootExecutionId: "root-1",
+        type: "turn.text_delta",
+        agentId,
+        turnId: "turn-1",
+        timestamp: now,
+        data: { stream: "output", text: "second" },
+      },
+    ],
+  });
+  token = "generation-two";
+
+  const drained = await pending;
+  assert.equal(assertTimelineValue(drained).kind, "event");
+  const terminal = await nextWithTimeout(iterator, 200);
+  assert.notEqual(terminal, "timeout");
+  const terminalItem = terminal === "timeout" ? undefined : assertTimelineValue(terminal);
+  assert.equal(terminalItem?.kind, "terminal");
+  assert.equal(terminalItem?.kind === "terminal" ? terminalItem.reason : "", "instance_replaced");
 });

@@ -8,6 +8,7 @@ import { runMcpServer } from "./mcp-server.js";
 import {
   createAgentDiagnostics,
   type AgentDiagnosticSummary,
+  type DiagnosticTimelineItem,
   type DiagnosticWarning,
 } from "./mcp/diagnostics/index.js";
 import { getAcpxVersion } from "./version.js";
@@ -22,6 +23,11 @@ type AgentsListOptions = {
 };
 
 type AgentsStatusOptions = {
+  json?: boolean;
+};
+
+type AgentsAttachOptions = {
+  history?: string;
   json?: boolean;
 };
 
@@ -93,7 +99,38 @@ function createAgentsCommand(): Command {
     .description("只读跟随单个 Agent 的事件")
     .argument("<agent-selector>", "完整 Agent UUID 或唯一前缀")
     .option("--history <count>", "初始历史事件数量", "20")
-    .option("--json", "输出 JSONL");
+    .option("--json", "输出 JSONL")
+    .action(async (selector: string, options: AgentsAttachOptions) => {
+      const abort = new AbortController();
+      const onInterrupt = () => abort.abort();
+      process.once("SIGINT", onInterrupt);
+      let exitCode = 0;
+      try {
+        const stream = createAgentDiagnostics().attachAgent(selector, {
+          history: Number.parseInt(options.history ?? "20", 10),
+          signal: abort.signal,
+        });
+        while (true) {
+          const next = await stream.next();
+          if (next.done) {
+            exitCode = next.value;
+            break;
+          }
+          writeTimelineItem(next.value, Boolean(options.json));
+          if (next.value.kind === "terminal") {
+            exitCode = terminalExitCode(next.value.reason);
+          }
+        }
+      } catch (error) {
+        process.stderr.write(
+          `[cs-agent-mcp] ${error instanceof Error ? error.message : String(error)}\n`,
+        );
+        exitCode = 1;
+      } finally {
+        process.removeListener("SIGINT", onInterrupt);
+      }
+      process.exitCode = exitCode;
+    });
 
   return agents;
 }
@@ -129,6 +166,34 @@ function writeAgentStatusText(agent: AgentDiagnosticSummary): void {
     process.stdout.write(`Active turn: ${agent.activeTurnId}\n`);
   }
   process.stdout.write(`Queue depth: ${agent.queueDepth}\n`);
+}
+
+function writeTimelineItem(item: DiagnosticTimelineItem, json: boolean): void {
+  if (json) {
+    process.stdout.write(`${JSON.stringify(item)}\n`);
+    return;
+  }
+  if (item.kind === "snapshot") {
+    process.stdout.write(`snapshot ${item.agent.agentId} ${item.agent.state}\n`);
+    return;
+  }
+  if (item.kind === "event") {
+    process.stdout.write(
+      `${item.event.cursor} ${item.event.timestamp} ${item.event.type} ${item.event.summary}\n`,
+    );
+    return;
+  }
+  process.stdout.write(`terminal ${item.reason}\n`);
+}
+
+function terminalExitCode(
+  reason: Extract<DiagnosticTimelineItem, { kind: "terminal" }>["reason"],
+): number {
+  return reason === "instance_stopped" ||
+    reason === "instance_unknown" ||
+    reason === "instance_replaced"
+    ? 1
+    : 0;
 }
 
 async function main(argv: string[]): Promise<void> {

@@ -27,7 +27,7 @@ steps:
     action: "跟随节点：完成 attach 历史 baseline、目录 watcher/fallback、cursor、事件投影、最终 drain 和终止语义"
     exit_signal: "mock Facade 无漏读/重复，stop/restart/Ctrl-C 正确；permission 子进程可 read/watch/kill、写入被拒绝"
     evidence: "process integration test + Node permission model (filter ExperimentalWarning)"
-    status: pending
+    status: done
   - id: S5
     action: "Harden 与交付：收紧逐事件 allowlist、poison fields、10k 历史性能、文档和安装产物"
     exit_signal: "全部 core 场景、完整检查通过；tarball smoke 实际调用 agents 子命令并保留 13 工具生命周期验证"
@@ -38,11 +38,11 @@ checks:
   - id: C01
     item: "AgentDiagnostics 隐藏精确文件发现、nested schema 校验、lock generation、selector 与 cursor 跟随"
     source: 名词契约
-    status: pending
+    status: done
   - id: C02
     item: "list/status 使用稳定诊断 DTO，attach JSONL 只输出 snapshot/event/terminal allowlist 记录"
     source: 名词契约
-    status: pending
+    status: done
   - id: C03
     item: "无参数 cs-agent-mcp 保持直接启动 stdio MCP，且不增加终端输出"
     source: 编排骨架
@@ -54,11 +54,11 @@ checks:
   - id: C05
     item: "attach 先给有限历史并建立 baseline，再用目录 watcher + fallback 按 cursor 跟随，idle 不退出"
     source: 流程级约束
-    status: pending
+    status: done
   - id: C06
     item: "已 destroyed、Facade 停止/更替和 Ctrl-C 遵守退出码语义，停止前最终 drain 不丢末尾事件"
     source: 流程级约束
-    status: pending
+    status: done
   - id: C07
     item: "npm binary 命令树只新增 agents list/status/attach 一个公共挂载面"
     source: 挂载点
@@ -66,7 +66,7 @@ checks:
   - id: C08
     item: "诊断路径不调用 mutation/runtime/identity/lock acquire-remove；live attach 在无 fs-write 权限下可运行"
     source: 范围守护
-    status: pending
+    status: done
   - id: C09
     item: "不改变 facade.v1 schema、13 个 MCP 工具、无参数/--cwd/--version/--help 语义"
     source: 范围守护

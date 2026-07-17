@@ -28,3 +28,7 @@ ledger:
     status: done
     commit_range: "0d71d74..98b3d8d"
     evidence: "RED: pnpm run build:test && node --test dist-test/test/mcp-cli.test.js failed 2 new list/status CLI tests because list still returned No agents found and status emitted no corrupt warning; GREEN: same command passed 12/12 mcp-cli tests; VERIFY: pnpm run format:check && pnpm run lint && pnpm run test passed 203/203 tests; cleanliness rg console.log|console.error|TODO|FIXME|XXX found no new matches"
+  - step_id: S4
+    status: done
+    commit_range: "c0ad21e..HEAD"
+    evidence: "RED: pnpm run build:test && node --test dist-test/test/agent-diagnostics.test.js failed attach replacement drain behavior via watcher/lock generation; GREEN: agent-diagnostics + mcp-cli directed tests passed 18/18 including destroyed/stopped/replaced/Ctrl-C and Node --permission --allow-fs-read=* live attach with write denied ERR_ACCESS_DENIED; VERIFY: pnpm run format:check && pnpm run lint && pnpm run test passed 207/207 tests; cleanliness rg console.log|console.error|TODO|FIXME|XXX found no new matches"
