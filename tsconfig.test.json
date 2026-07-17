@@ -9,6 +9,7 @@
   },
   "include": [
     "src/**/*.ts",
+    "test/agent-diagnostics.test.ts",
     "test/client.test.ts",
     "test/mcp-cli.test.ts",
     "test/mcp-e2e.test.ts",

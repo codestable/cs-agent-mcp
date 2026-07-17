@@ -17,7 +17,7 @@ steps:
     action: "只读状态节点：接通精确 snapshot 发现、nested 校验、实例 probe、全集 selector 与诊断 DTO"
     exit_signal: "running/stopped/unknown/corrupt fixture 结果确定，tmp/lock/candidate 不误报，selector fail-closed"
     evidence: "unit test + integration fixture"
-    status: pending
+    status: done
   - id: S3
     action: "查询节点：完成 agents list/status 的文本、JSON 和错误契约"
     exit_signal: "正常、空结果、--all、隐藏目标、唯一前缀、歧义和损坏数据的子进程 CLI 测试通过"
@@ -50,7 +50,7 @@ checks:
   - id: C04
     item: "list 默认过滤与 selector 全集解析解耦；隐藏候选参与歧义，unreadable snapshot 下 prefix fail-closed"
     source: 流程级约束
-    status: pending
+    status: done
   - id: C05
     item: "attach 先给有限历史并建立 baseline，再用目录 watcher + fallback 按 cursor 跟随，idle 不退出"
     source: 流程级约束
@@ -94,7 +94,7 @@ checks:
   - id: C15
     item: "每个新增测试文件显式加入 package.json scripts.test，runner 输出按名称或计数证明实际执行"
     source: 验证命令
-    status: pending
+    status: done
   - id: C16
     item: "text delta 仅 stream=output 输出正文，thought/缺失/非法/未来 stream 一律 omitted"
     source: 事件投影白名单

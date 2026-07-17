@@ -19,6 +19,24 @@ export type FacadeProcessLock = {
   release(): Promise<void>;
 };
 
+export type FacadeProcessLockProbe =
+  | {
+      state: "running";
+      pid: number;
+      token: string;
+      createdAt: string;
+    }
+  | {
+      state: "stopped";
+      pid?: number;
+      token?: string;
+      createdAt?: string;
+    }
+  | {
+      state: "unknown";
+      reason: string;
+    };
+
 export class FacadeProcessLockError extends Error {
   readonly code = "FACADE_ALREADY_RUNNING";
 
@@ -63,6 +81,36 @@ function isProcessAlive(pid: number): boolean {
   } catch (error) {
     return !hasErrorCode(error, "ESRCH");
   }
+}
+
+export async function probeFacadeProcessLock(lockPath: string): Promise<FacadeProcessLockProbe> {
+  let content: string;
+  try {
+    content = await fs.readFile(lockPath, "utf8");
+  } catch (error) {
+    if (hasErrorCode(error, "ENOENT")) {
+      return { state: "stopped" };
+    }
+    return {
+      state: "unknown",
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    return { state: "unknown", reason: "Invalid facade process lock JSON" };
+  }
+  const record = facadeProcessLockRecordSchema.safeParse(parsed);
+  if (!record.success) {
+    return { state: "unknown", reason: "Invalid facade process lock record" };
+  }
+  if (isProcessAlive(record.data.pid)) {
+    return { state: "running", ...record.data };
+  }
+  return { state: "stopped", ...record.data };
 }
 
 async function removeStaleLock(lockPath: string): Promise<void> {
