@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -54,6 +55,28 @@ await fs.writeFile(
   "utf8",
 );
 
+async function runBinary(args) {
+  const child = spawn(binary, args, {
+    env: { ...getDefaultEnvironment(), HOME: home },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", (chunk) => {
+    stdout += chunk;
+  });
+  child.stderr.on("data", (chunk) => {
+    stderr += chunk;
+  });
+  const code = await new Promise((resolve, reject) => {
+    child.on("error", reject);
+    child.on("exit", resolve);
+  });
+  return { code, stdout, stderr };
+}
+
 const client = new Client({ name: "cs-agent-package-smoke", version: "1.0.0" });
 try {
   await client.connect(
@@ -74,7 +97,7 @@ try {
     name: "cs_agent_create",
     arguments: { agent: "claude", name: "package-smoke" },
   });
-  assert.equal(created.isError, undefined);
+  assert.equal(created.isError, undefined, JSON.stringify(created.structuredContent));
   const agentId = created.structuredContent?.agent?.agentId;
   assert.equal(typeof agentId, "string");
 
@@ -106,7 +129,33 @@ try {
     arguments: { agentId, discardSession: true },
   });
   assert.equal(destroyed.structuredContent?.agent?.state, "destroyed");
-  process.stdout.write(`${JSON.stringify({ toolCount: tools.tools.length, lifecycle: "ok" })}\n`);
+
+  const agentsHelp = await runBinary(["agents", "--help"]);
+  assert.equal(agentsHelp.code, 0);
+  assert.match(agentsHelp.stdout, /list/);
+  assert.match(agentsHelp.stdout, /status/);
+  assert.match(agentsHelp.stdout, /attach/);
+
+  const agentsList = await runBinary(["agents", "list", "--all", "--json"]);
+  assert.equal(agentsList.code, 0);
+  const listJson = JSON.parse(agentsList.stdout);
+  assert.equal(
+    listJson.agents.some((agent) => agent.agentId === agentId),
+    true,
+  );
+
+  const agentsStatus = await runBinary(["agents", "status", agentId, "--json"]);
+  assert.equal(agentsStatus.code, 0);
+  assert.equal(JSON.parse(agentsStatus.stdout).agent.agentId, agentId);
+
+  const agentsAttach = await runBinary(["agents", "attach", agentId, "--history", "1", "--json"]);
+  assert.equal(agentsAttach.code, 0);
+  assert.match(agentsAttach.stdout, /"kind":"terminal"/);
+  assert.match(agentsAttach.stdout, /"reason":"agent_destroyed"/);
+
+  process.stdout.write(
+    `${JSON.stringify({ toolCount: tools.tools.length, lifecycle: "ok", diagnostics: "ok" })}\n`,
+  );
 } finally {
   await client.close().catch(() => {});
   await fs.rm(home, { recursive: true, force: true });

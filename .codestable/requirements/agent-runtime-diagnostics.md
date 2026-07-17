@@ -2,9 +2,9 @@
 doc_type: requirement
 slug: agent-runtime-diagnostics
 pitch: 在终端一眼看清正在运行的 Agent，并快速定位卡住或失败的原因。
-status: draft
+status: current
 last_reviewed: 2026-07-17
-implemented_by: []
+implemented_by: [agent-runtime-diagnostics]
 tags: [cli, diagnostics, agents]
 ---
 

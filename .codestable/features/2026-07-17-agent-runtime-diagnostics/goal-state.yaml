@@ -1,7 +1,7 @@
 feature: "2026-07-17-agent-runtime-diagnostics"
-status: running
+status: ready
 baseline_ref: "23bd73868624ea843807a602ba550e1c803aa63d"
-stage: implementation
+stage: review
 driver_kind: paseo
 driver_id: "e0827d08-b552-420e-8c05-507137744ba3"
 handoff_reason: ""
@@ -32,3 +32,7 @@ ledger:
     status: done
     commit_range: "c0ad21e..318a37c"
     evidence: "RED: pnpm run build:test && node --test dist-test/test/agent-diagnostics.test.js failed attach replacement drain behavior via watcher/lock generation; GREEN: agent-diagnostics + mcp-cli directed tests passed 18/18 including destroyed/stopped/replaced/Ctrl-C and Node --permission --allow-fs-read=* live attach with write denied ERR_ACCESS_DENIED; VERIFY: pnpm run format:check && pnpm run lint && pnpm run test passed 207/207 tests; cleanliness rg console.log|console.error|TODO|FIXME|XXX found no new matches"
+  - step_id: S5
+    status: done
+    commit_range: "991c667..HEAD"
+    evidence: 'RED: S5 hardening tests initially failed before tool_call location allowlist and debounce/read counting hooks; GREEN: node --test dist-test/test/agent-diagnostics.test.js passed 5/5 including poison fields, 10k history cap, and fake scheduler debounce parse count; VERIFY: node --test dist-test/test/mcp-cli.test.js passed 15/15, NPM_CONFIG_CACHE=/tmp/cs-agent-mcp-npm-cache pnpm run check passed 209/209 tests plus pack dry-run, package smoke output {"toolCount":13,"lifecycle":"ok","diagnostics":"ok"}; exact pnpm run check without cache override reached pack:check but failed on root-owned ~/.npm cache EPERM, classified as local environment cache issue'

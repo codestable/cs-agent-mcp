@@ -4,6 +4,13 @@
 
 ## 未发布
 
+### 诊断 CLI
+
+- 新增只读诊断命令 `cs-agent-mcp agents list|status|attach`，可从终端查看本机
+  Facade snapshot 中的 Agent 状态并按 cursor 跟随事件。
+- 诊断 JSON 使用 `cs-agent-mcp.diagnostics.v1`，只输出 allowlist 字段，避免泄露 thought、
+  identity、Permission request 和 raw tool payload。
+
 ### 错误处理
 
 - Claude 达到显式 `sessionOptions.maxTurns` 上限时返回可识别的 `MAX_TURNS_EXCEEDED` 错误和

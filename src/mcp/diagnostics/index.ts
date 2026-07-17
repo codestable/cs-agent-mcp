@@ -137,6 +137,34 @@ export type AgentDiagnostics = {
 type AgentDiagnosticsOptions = {
   facadesDir?: string;
   probeLock?: (lockPath: string) => Promise<FacadeProcessLockProbe>;
+  readFile?: (filePath: string) => Promise<string>;
+  watchFacadeChanges?: WatchFacadeChanges;
+  scheduler?: Scheduler;
+  debounceMs?: number;
+  fallbackMs?: number;
+  finalDrainMs?: number;
+};
+
+type WatchFacadeChanges = (
+  facadesDir: string,
+  onChange: () => void,
+  onError: () => void,
+) => { close(): void };
+
+type Scheduler = {
+  setTimeout(callback: () => void, ms: number): unknown;
+  clearTimeout(handle: unknown): void;
+};
+
+type AgentDiagnosticsRuntime = {
+  facadesDir: string;
+  probeLock: (lockPath: string) => Promise<FacadeProcessLockProbe>;
+  readFile: (filePath: string) => Promise<string>;
+  watchFacadeChanges: WatchFacadeChanges;
+  scheduler: Scheduler;
+  debounceMs: number;
+  fallbackMs: number;
+  finalDrainMs: number;
 };
 
 type ReadableInstance = {
@@ -173,9 +201,16 @@ const SNAPSHOT_FILE_PATTERN = /^[0-9a-f]{24}\.json$/;
 const FULL_AGENT_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export function createAgentDiagnostics(options: AgentDiagnosticsOptions = {}): AgentDiagnostics {
-  const facadesDir =
-    options.facadesDir ?? path.join(os.homedir(), ".cs-agent-mcp", "mcp", "facades");
-  const probeLock = options.probeLock ?? probeFacadeProcessLock;
+  const {
+    facadesDir,
+    probeLock,
+    readFile,
+    watchFacadeChanges,
+    scheduler,
+    debounceMs,
+    fallbackMs,
+    finalDrainMs,
+  } = resolveAgentDiagnosticsRuntime(options);
 
   async function readInstances(): Promise<{
     instances: ReadableInstance[];
@@ -211,7 +246,7 @@ export function createAgentDiagnostics(options: AgentDiagnosticsOptions = {}): A
     const snapshotPath = path.join(facadesDir, entry);
     let snapshot: FacadeSnapshot;
     try {
-      snapshot = parseDiagnosticSnapshot(await readJson(snapshotPath));
+      snapshot = parseDiagnosticSnapshot(await readJson(snapshotPath, readFile));
     } catch (error) {
       return {
         ok: false,
@@ -390,7 +425,7 @@ export function createAgentDiagnostics(options: AgentDiagnosticsOptions = {}): A
     if (events.length > 0) {
       return state;
     }
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await sleep(finalDrainMs, scheduler);
     const finalDrain = await readTarget(state.target.agent.agentId);
     if (!finalDrain.found) {
       return state;
@@ -425,7 +460,13 @@ export function createAgentDiagnostics(options: AgentDiagnosticsOptions = {}): A
     }
     let state = prepared.state;
     while (true) {
-      await waitForFacadeChange(facadesDir, signal);
+      await waitForFacadeChange(facadesDir, {
+        signal,
+        watchFacadeChanges,
+        scheduler,
+        debounceMs,
+        fallbackMs,
+      });
       if (signal?.aborted) {
         yield terminalItem("interrupted");
         return 0;
@@ -461,8 +502,35 @@ export function createAgentDiagnostics(options: AgentDiagnosticsOptions = {}): A
   };
 }
 
-async function readJson(filePath: string): Promise<unknown> {
-  return JSON.parse(await fs.readFile(filePath, "utf8"));
+function resolveAgentDiagnosticsRuntime(options: AgentDiagnosticsOptions): AgentDiagnosticsRuntime {
+  return {
+    facadesDir: withDefault(
+      options.facadesDir,
+      path.join(os.homedir(), ".cs-agent-mcp", "mcp", "facades"),
+    ),
+    probeLock: withDefault(options.probeLock, probeFacadeProcessLock),
+    readFile: withDefault(options.readFile, defaultReadFile),
+    watchFacadeChanges: withDefault(options.watchFacadeChanges, defaultWatchFacadeChanges),
+    scheduler: withDefault(options.scheduler, defaultScheduler),
+    debounceMs: withDefault(options.debounceMs, 25),
+    fallbackMs: withDefault(options.fallbackMs, 1_000),
+    finalDrainMs: withDefault(options.finalDrainMs, 25),
+  };
+}
+
+function withDefault<T>(value: T | undefined, fallback: T): T {
+  return value === undefined ? fallback : value;
+}
+
+async function defaultReadFile(filePath: string): Promise<string> {
+  return fs.readFile(filePath, "utf8");
+}
+
+async function readJson(
+  filePath: string,
+  readFile: (filePath: string) => Promise<string>,
+): Promise<unknown> {
+  return JSON.parse(await readFile(filePath));
 }
 
 function hasErrorCode(error: unknown, code: string): boolean {
@@ -584,7 +652,7 @@ function projectEventDetail(event: FacadeEvent): Record<string, unknown> & { sum
     return pickScalars(data, ["text", "tag", "used", "size"], event.type);
   }
   if (event.type === "turn.tool_call") {
-    return pickScalars(data, ["toolCallId", "status", "title", "kind", "locations"], event.type);
+    return projectToolCall(data);
   }
   if (
     event.type === "turn.failed" ||
@@ -602,6 +670,46 @@ function projectEventDetail(event: FacadeEvent): Record<string, unknown> & { sum
     ["state", "permissionId", "inferredKind", "outcome", "messageId"],
     event.type,
   );
+}
+
+function projectToolCall(
+  data: Record<string, unknown>,
+): Record<string, unknown> & { summary?: string } {
+  const detail = pickScalars(data, ["toolCallId", "status", "title", "kind"], "turn.tool_call");
+  const locations = sanitizeLocations(data.locations);
+  if (locations.length > 0) {
+    detail.locations = locations;
+  }
+  return detail;
+}
+
+function sanitizeLocations(value: unknown): Array<Record<string, string | number | boolean>> {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((location) => sanitizeLocation(location))
+    .filter((location) => Object.keys(location).length > 0);
+}
+
+function sanitizeLocation(value: unknown): Record<string, string | number | boolean> {
+  const record = asRecord(value);
+  const output: Record<string, string | number | boolean> = {};
+  for (const key of [
+    "path",
+    "line",
+    "column",
+    "startLine",
+    "startColumn",
+    "endLine",
+    "endColumn",
+  ]) {
+    const field = record[key];
+    if (isScalar(field)) {
+      output[key] = field;
+    }
+  }
+  return output;
 }
 
 function projectTextDelta(
@@ -667,31 +775,78 @@ function truncateText(text: string): { text: string; truncated: boolean } {
   return { text: chars.slice(0, 2_000).join(""), truncated: true };
 }
 
-async function waitForFacadeChange(facadesDir: string, signal?: AbortSignal): Promise<void> {
+async function waitForFacadeChange(
+  facadesDir: string,
+  options: {
+    signal?: AbortSignal;
+    watchFacadeChanges: WatchFacadeChanges;
+    scheduler: Scheduler;
+    debounceMs: number;
+    fallbackMs: number;
+  },
+): Promise<void> {
+  const { signal, watchFacadeChanges, scheduler, debounceMs, fallbackMs } = options;
   if (signal?.aborted) {
     return;
   }
   await new Promise<void>((resolve) => {
     let settled = false;
-    let watcher: ReturnType<typeof watch> | undefined;
-    const timeout = setTimeout(() => done(), 1_000);
+    let watcher: { close(): void } | undefined;
+    let debounceTimer: unknown;
+    const fallbackTimer = scheduler.setTimeout(() => done(), fallbackMs);
+    const scheduleDone = () => {
+      if (settled) {
+        return;
+      }
+      if (debounceTimer) {
+        scheduler.clearTimeout(debounceTimer);
+      }
+      debounceTimer = scheduler.setTimeout(() => done(), debounceMs);
+    };
     const done = () => {
       if (settled) {
         return;
       }
       settled = true;
-      clearTimeout(timeout);
+      scheduler.clearTimeout(fallbackTimer);
+      if (debounceTimer) {
+        scheduler.clearTimeout(debounceTimer);
+      }
       watcher?.close();
       signal?.removeEventListener("abort", done);
       resolve();
     };
     try {
-      watcher = watch(facadesDir, { persistent: false }, done);
-      watcher.on("error", done);
+      watcher = watchFacadeChanges(facadesDir, scheduleDone, done);
     } catch {
       // The 1s fallback remains active when fs.watch is unavailable.
     }
     signal?.addEventListener("abort", done, { once: true });
+  });
+}
+
+function defaultWatchFacadeChanges(
+  facadesDir: string,
+  onChange: () => void,
+  onError: () => void,
+): { close(): void } {
+  const watcher = watch(facadesDir, { persistent: false }, onChange);
+  watcher.on("error", onError);
+  return watcher;
+}
+
+const defaultScheduler: Scheduler = {
+  setTimeout(callback, ms) {
+    return setTimeout(callback, ms);
+  },
+  clearTimeout(handle) {
+    clearTimeout(handle as ReturnType<typeof setTimeout>);
+  },
+};
+
+async function sleep(ms: number, scheduler: Scheduler): Promise<void> {
+  await new Promise<void>((resolve) => {
+    scheduler.setTimeout(resolve, ms);
   });
 }
 

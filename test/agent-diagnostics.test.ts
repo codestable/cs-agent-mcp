@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { createAgentDiagnostics } from "../src/mcp/diagnostics/index.js";
-import type { FacadeSnapshot } from "../src/mcp/facade/types.js";
+import type { FacadeEvent, FacadeSnapshot } from "../src/mcp/facade/types.js";
 
 const now = "2026-07-17T00:00:00.000Z";
 
@@ -71,6 +71,29 @@ async function nextWithTimeout<T>(
 function assertTimelineValue<T>(result: IteratorResult<T, number>): T {
   assert.equal(result.done, false);
   return result.value;
+}
+
+function createFakeScheduler() {
+  type Timer = { callback: () => void; ms: number; active: boolean };
+  const timers: Timer[] = [];
+  return {
+    scheduler: {
+      setTimeout(callback: () => void, ms: number): Timer {
+        const timer = { callback, ms, active: true };
+        timers.push(timer);
+        return timer;
+      },
+      clearTimeout(handle: unknown): void {
+        (handle as Timer).active = false;
+      },
+    },
+    runActive(ms: number): void {
+      for (const timer of timers.filter((candidate) => candidate.active && candidate.ms === ms)) {
+        timer.active = false;
+        timer.callback();
+      }
+    },
+  };
 }
 
 test("agent diagnostics discovers precise snapshot files and maps instance/agent DTOs", async (t) => {
@@ -240,4 +263,147 @@ test("agent diagnostics attach drains cursor events before reporting an instance
   const terminalItem = terminal === "timeout" ? undefined : assertTimelineValue(terminal);
   assert.equal(terminalItem?.kind, "terminal");
   assert.equal(terminalItem?.kind === "terminal" ? terminalItem.reason : "", "instance_replaced");
+});
+
+test("agent diagnostics attach debounces burst watcher changes before rereading snapshots", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "cs-agent-diagnostics-debounce-"));
+  t.after(async () => await fs.rm(directory, { recursive: true, force: true }));
+  const instanceId = "ffffffffffffffffffffffff";
+  const agentId = "77777777-7777-4777-8777-777777777777";
+  const snapshotPath = path.join(directory, `${instanceId}.json`);
+  const changes: Array<() => void> = [];
+  const fake = createFakeScheduler();
+  let snapshotReadCount = 0;
+  await writeJson(snapshotPath, {
+    ...snapshot({
+      [agentId]: agent({ agentId, state: "running" }),
+    }),
+    events: [],
+  });
+  const diagnostics = createAgentDiagnostics({
+    facadesDir: directory,
+    probeLock: async () => ({ state: "running", pid: 123, token: "stable-token", createdAt: now }),
+    readFile: async (filePath) => {
+      if (filePath === snapshotPath) {
+        snapshotReadCount += 1;
+      }
+      return fs.readFile(filePath, "utf8");
+    },
+    watchFacadeChanges: (_facadesDir, onChange) => {
+      changes.push(onChange);
+      return { close() {} };
+    },
+    scheduler: fake.scheduler,
+    debounceMs: 25,
+    fallbackMs: 1_000,
+  });
+
+  const iterator = diagnostics.attachAgent(agentId, { history: 0 });
+  assert.equal(assertTimelineValue(await iterator.next()).kind, "snapshot");
+  assert.equal(snapshotReadCount, 1);
+  const pending = iterator.next();
+  await Promise.resolve();
+  assert.equal(changes.length, 1);
+
+  const events: FacadeEvent[] = Array.from({ length: 10_000 }, (_, index) => ({
+    cursor: String(index + 1),
+    rootExecutionId: "root-1",
+    type: "turn.text_delta",
+    agentId,
+    turnId: "turn-1",
+    timestamp: now,
+    data: { stream: "output", text: `burst-${index + 1}` },
+  }));
+  await writeJson(snapshotPath, {
+    ...snapshot({
+      [agentId]: agent({ agentId, state: "running" }),
+    }),
+    events,
+  });
+  changes[0]?.();
+  changes[0]?.();
+  changes[0]?.();
+  assert.equal(snapshotReadCount, 1);
+
+  fake.runActive(25);
+  const firstEvent = assertTimelineValue(await pending);
+  assert.equal(firstEvent.kind, "event");
+  assert.equal(firstEvent.kind === "event" ? firstEvent.event.cursor : "", "1");
+  assert.equal(snapshotReadCount, 2);
+  await iterator.return(0);
+});
+
+test("agent diagnostics attach projects event allowlists without poison fields and caps long history", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "cs-agent-diagnostics-harden-"));
+  t.after(async () => await fs.rm(directory, { recursive: true, force: true }));
+  const instanceId = "abababababababababababab";
+  const agentId = "66666666-6666-4666-8666-666666666666";
+  const events: FacadeEvent[] = Array.from({ length: 10_000 }, (_, index) => ({
+    cursor: String(index + 1),
+    rootExecutionId: "root-1",
+    type: "turn.text_delta",
+    agentId,
+    turnId: "turn-1",
+    timestamp: now,
+    data: { stream: "output", text: `event-${index + 1}` },
+  }));
+  events.push(
+    {
+      cursor: "10001",
+      rootExecutionId: "root-1",
+      type: "turn.text_delta",
+      agentId,
+      turnId: "turn-1",
+      timestamp: now,
+      data: { stream: "thought", text: "secret-thought" },
+    },
+    {
+      cursor: "10002",
+      rootExecutionId: "root-1",
+      type: "turn.tool_call",
+      agentId,
+      turnId: "turn-1",
+      timestamp: now,
+      data: {
+        toolCallId: "tool-1",
+        status: "completed",
+        title: "Read file",
+        kind: "read",
+        locations: [{ path: "src/index.ts", line: 12, column: 3, raw: "drop-me" }],
+        rawInput: "secret-input",
+        content: "secret-content",
+      },
+    },
+  );
+  await writeJson(path.join(directory, `${instanceId}.json`), {
+    ...snapshot({
+      [agentId]: agent({ agentId, state: "destroyed" }),
+    }),
+    events,
+  });
+  const diagnostics = createAgentDiagnostics({
+    facadesDir: directory,
+    probeLock: async () => ({ state: "running", pid: 123, token: "token", createdAt: now }),
+  });
+
+  const iterator = diagnostics.attachAgent(agentId, { history: 4 });
+  assert.equal(assertTimelineValue(await iterator.next()).kind, "snapshot");
+  const projected = [
+    assertTimelineValue(await iterator.next()),
+    assertTimelineValue(await iterator.next()),
+    assertTimelineValue(await iterator.next()),
+    assertTimelineValue(await iterator.next()),
+  ];
+  assert.deepEqual(
+    projected.map((item) => (item.kind === "event" ? item.event.cursor : "")),
+    ["9999", "10000", "10001", "10002"],
+  );
+  const serialized = JSON.stringify(projected);
+  assert.doesNotMatch(serialized, /secret-thought|secret-input|secret-content|drop-me/);
+  const thought = projected[2];
+  assert.equal(thought.kind === "event" ? thought.event.detail.omitted : undefined, true);
+  const tool = projected[3];
+  assert.deepEqual(tool.kind === "event" ? tool.event.detail.locations : undefined, [
+    { path: "src/index.ts", line: 12, column: 3 },
+  ]);
 });
