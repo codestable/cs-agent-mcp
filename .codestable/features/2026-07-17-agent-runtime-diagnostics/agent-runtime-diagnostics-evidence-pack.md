@@ -174,6 +174,19 @@ fake clock/scheduler 测试，不改变公开 CLI、MCP 工具或持久化 schem
 - 清洁度：删除 replacement 旧断言留下的未使用 helper；复杂度通过等价小函数提取回到 lint 阈值内；
   无新增 debug output、TODO/FIXME/XXX、注释旧代码或无用 import。
 
+## Review-fix Round 3
+
+- Review input：`agent-runtime-diagnostics-review.md` round 3，结论为 `changes-requested`。
+- 修复范围：REV-017 与同一文本边界 REV-018；只改 diagnostics event 投影和测试 fixture。
+- RED：把 `turn.failed` fixture 改为 Facade 真实的 `{stopReason,error:{...}}`、cancelled 改为
+  `{reason}` 并加入超长 tag 后，定向测试因 2,001 code points 与缺失嵌套 error/reason 失败。
+- GREEN：新增 terminal-turn projector，顶层只读取 `stopReason/reason`，嵌套 error 只读取
+  `code/message/retryable/runtimeCode`；`stack` 等未知字段不透传；`tag/stopReason/reason` 纳入统一文本
+  截断和 summary 聚合。
+- VERIFY：diagnostics 8/8；完整 `pnpm run check` 退出 0；package smoke 输出
+  `{"toolCount":13,"lifecycle":"ok","diagnostics":"ok"}`。
+- 清洁度：format、type-aware lint、typecheck、全量 test 与 pack dry-run 均通过，无方案外文件或临时痕迹。
+
 ## 验收场景自检
 
 - 无参数 stdio 和 13 MCP 工具生命周期：`mcp-cli.test`、`mcp-e2e.test`、package smoke 覆盖。

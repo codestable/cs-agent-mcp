@@ -202,8 +202,8 @@ type PreparedAttach = {
 const SNAPSHOT_FILE_PATTERN = /^[0-9a-f]{24}\.json$/;
 const FULL_AGENT_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MIN_REREAD_INTERVAL_MS = 250;
-const TRUNCATED_DETAIL_KEYS = new Set(["text", "title", "message"]);
-const SUMMARY_DETAIL_KEYS = new Set(["text", "title", "state", "message"]);
+const TRUNCATED_DETAIL_KEYS = new Set(["text", "title", "message", "tag", "stopReason", "reason"]);
+const SUMMARY_DETAIL_KEYS = new Set(["text", "title", "state", "message", "stopReason", "reason"]);
 const FACADE_EVENT_TYPES = [
   "audit.mutation",
   "agent.created",
@@ -756,17 +756,31 @@ function projectEventDetail(event: FacadeEvent): Record<string, unknown> & { sum
     event.type === "turn.completed" ||
     event.type === "turn.cancelled"
   ) {
-    return pickScalars(
-      data,
-      ["stopReason", "code", "message", "retryable", "runtimeCode"],
-      event.type,
-    );
+    return projectTerminalTurn(data, event.type);
   }
   return pickScalars(
     data,
     ["state", "permissionId", "inferredKind", "outcome", "messageId"],
     event.type,
   );
+}
+
+function projectTerminalTurn(
+  data: Record<string, unknown>,
+  eventType: "turn.failed" | "turn.completed" | "turn.cancelled",
+): Record<string, unknown> & { summary?: string } {
+  const detail = pickScalars(data, ["stopReason", "reason"], eventType);
+  const error = pickScalars(
+    asRecord(data.error),
+    ["code", "message", "retryable", "runtimeCode"],
+    eventType,
+  );
+  const { summary, ...errorFields } = error;
+  Object.assign(detail, errorFields);
+  if (summary !== eventType) {
+    detail.summary = summary;
+  }
+  return detail;
 }
 
 function projectToolCall(

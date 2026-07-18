@@ -587,7 +587,7 @@ test("agent diagnostics truncates all allowlisted diagnostic text fields", async
         agentId,
         turnId: "turn-1",
         timestamp: now,
-        data: { text: longText },
+        data: { text: longText, tag: longText },
       },
       {
         cursor: "2",
@@ -605,7 +605,25 @@ test("agent diagnostics truncates all allowlisted diagnostic text fields", async
         agentId,
         turnId: "turn-1",
         timestamp: now,
-        data: { message: longText },
+        data: {
+          stopReason: longText,
+          error: {
+            code: "RUNTIME_FAILURE",
+            message: longText,
+            retryable: false,
+            runtimeCode: "E_RUNTIME",
+            stack: "drop-me",
+          },
+        },
+      },
+      {
+        cursor: "4",
+        rootExecutionId: "root-1",
+        type: "turn.cancelled",
+        agentId,
+        turnId: "turn-1",
+        timestamp: now,
+        data: { reason: longText },
       },
     ],
   });
@@ -622,18 +640,26 @@ test("agent diagnostics truncates all allowlisted diagnostic text fields", async
   assert.equal(typeof lastError.message === "string" ? lastError.message.length : 0, 2_000);
   assert.equal(lastError.truncated, true);
 
-  const iterator = diagnostics.attachAgent(agentId, { history: 3 });
+  const iterator = diagnostics.attachAgent(agentId, { history: 4 });
   assert.equal(assertTimelineValue(await iterator.next()).kind, "snapshot");
-  for (const field of ["text", "title", "message"]) {
+  for (const fields of [["text", "tag"], ["title"], ["stopReason", "message"], ["reason"]]) {
     const item = assertTimelineValue(await iterator.next());
     assert.equal(item.kind === "event" ? item.event.summary.length : 0, 2_000);
     assert.equal(item.kind === "event" ? item.event.truncated : false, true);
-    assert.equal(
-      item.kind === "event" && typeof item.event.detail[field] === "string"
-        ? item.event.detail[field].length
-        : 0,
-      2_000,
-    );
+    for (const field of fields) {
+      assert.equal(
+        item.kind === "event" && typeof item.event.detail[field] === "string"
+          ? item.event.detail[field].length
+          : 0,
+        2_000,
+      );
+    }
     assert.equal(item.kind === "event" ? item.event.detail.truncated : false, true);
+    if (item.kind === "event" && item.event.type === "turn.failed") {
+      assert.equal(item.event.detail.code, "RUNTIME_FAILURE");
+      assert.equal(item.event.detail.retryable, false);
+      assert.equal(item.event.detail.runtimeCode, "E_RUNTIME");
+      assert.equal("stack" in item.event.detail, false);
+    }
   }
 });
