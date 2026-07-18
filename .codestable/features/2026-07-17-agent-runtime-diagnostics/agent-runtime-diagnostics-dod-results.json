@@ -1,0 +1,37 @@
+{
+  "gate_id": "dod-runner",
+  "stage": "qa",
+  "status": "passed",
+  "blocking": [],
+  "warnings": [],
+  "evidence": [
+    {
+      "command": "pnpm run check",
+      "exit_code": 0,
+      "stdout": "eCodeExecutable ignores a Windows command shim without a native executable\n  ---\n  duration_ms: 1.084708\n  type: 'test'\n  ...\n# Subtest: resolveClaudeCodeExecutable prefers a native sibling when PATH ordering finds a shim first\nok 197 - resolveClaudeCodeExecutable prefers a native sibling when PATH ordering finds a shim first\n  ---\n  duration_ms: 1.049958\n  type: 'test'\n  ...\n# Subtest: resolveWindowsExecutablePath follows a wrapper to a native entrypoint\nok 198 - resolveWindowsExecutablePath follows a wrapper to a native entrypoint\n  ---\n  duration_ms: 1.986666\n  type: 'test'\n  ...\n# Subtest: resolveClaudeCodeExecutable returns undefined when CLAUDE_CODE_EXECUTABLE is already set\nok 199 - resolveClaudeCodeExecutable returns undefined when CLAUDE_CODE_EXECUTABLE is already set\n  ---\n  duration_ms: 1.529875\n  type: 'test'\n  ...\n# Subtest: resolveClaudeCodeExecutable respects case-insensitive env var on Windows\nok 200 - resolveClaudeCodeExecutable respects case-insensitive env var on Windows\n  ---\n  duration_ms: 0.704792\n  type: 'test'\n  ...\n# Subtest: resolveClaudeCodeExecutable finds an executable Claude CLI on POSIX PATH\nok 201 - resolveClaudeCodeExecutable finds an executable Claude CLI on POSIX PATH\n  ---\n  duration_ms: 1.146334\n  type: 'test'\n  ...\n# Subtest: resolveClaudeCodeExecutable prefers the official POSIX user install over PATH\nok 202 - resolveClaudeCodeExecutable prefers the official POSIX user install over PATH\n  ---\n  duration_ms: 3.238709\n  type: 'test'\n  ...\n# Subtest: resolveClaudeCodeExecutable ignores a non-executable Claude file on POSIX PATH\nok 203 - resolveClaudeCodeExecutable ignores a non-executable Claude file on POSIX PATH\n  ---\n  duration_ms: 0.92525\n  type: 'test'\n  ...\n# Subtest: resolveClaudeCodeExecutable preserves an explicit POSIX Claude executable\nok 204 - resolveClaudeCodeExecutable preserves an explicit POSIX Claude executable\n  ---\n  duration_ms: 0.878458\n  type: 'test'\n  ...\n# Subtest: resolveClaudeCodeExecutable returns undefined when claude is not on PATH\nok 205 - resolveClaudeCodeExecutable returns undefined when claude is not on PATH\n  ---\n  duration_ms: 0.145667\n  type: 'test'\n  ...\n# Subtest: resolveCodexExecutable finds an executable Codex CLI on POSIX PATH\nok 206 - resolveCodexExecutable finds an executable Codex CLI on POSIX PATH\n  ---\n  duration_ms: 0.869708\n  type: 'test'\n  ...\n# Subtest: resolveCodexExecutable prefers the POSIX user install over PATH\nok 207 - resolveCodexExecutable prefers the POSIX user install over PATH\n  ---\n  duration_ms: 2.407292\n  type: 'test'\n  ...\n# Subtest: resolveCodexExecutable accepts Windows command shims and native executables\nok 208 - resolveCodexExecutable accepts Windows command shims and native executables\n  ---\n  duration_ms: 1.838834\n  type: 'test'\n  ...\n# Subtest: resolveCodexExecutable preserves an explicit CODEX_PATH\nok 209 - resolveCodexExecutable preserves an explicit CODEX_PATH\n  ---\n  duration_ms: 1.428667\n  type: 'test'\n  ...\n# Subtest: resolveCodexExecutable respects case-insensitive CODEX_PATH on Windows\nok 210 - resolveCodexExecutable respects case-insensitive CODEX_PATH on Windows\n  ---\n  duration_ms: 1.221958\n  type: 'test'\n  ...\n# Subtest: AcpClient injects the resolved CODEX_PATH into built-in Codex ACP launches\nok 211 - AcpClient injects the resolved CODEX_PATH into built-in Codex ACP launches\n  ---\n  duration_ms: 3.678125\n  type: 'test'\n  ...\n# Subtest: AcpClient preserves an explicit CODEX_PATH for built-in Codex ACP launches\nok 212 - AcpClient preserves an explicit CODEX_PATH for built-in Codex ACP launches\n  ---\n  duration_ms: 4.130083\n  type: 'test'\n  ...\n1..212\n# tests 212\n# suites 0\n# pass 212\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 37690.091666\n\n> cs-agent-mcp@0.1.1 pack:check /Users/wyattfang/work/cs-agent-mcp\n> npm pack --dry-run\n\n\n> cs-agent-mcp@0.1.1 prepack\n> tsdown --logLevel silent src/mcp-cli.ts --format esm --clean --platform node --target node22 --no-fixedExtension\n\ncs-agent-mcp-0.1.1.tgz\n",
+      "stderr": "npm notice\nnpm notice 📦  cs-agent-mcp@0.1.1\nnpm notice Tarball Contents\nnpm notice 1.1kB LICENSE\nnpm notice 15.9kB README.md\nnpm notice 11B dist/mcp-cli.d.ts\nnpm notice 404.1kB dist/mcp-cli.js\nnpm notice 897.0kB dist/mcp-cli.js.map\nnpm notice 7.6kB docs/MCP_ARCHITECTURE.md\nnpm notice 3.2kB package.json\nnpm notice Tarball Details\nnpm notice name: cs-agent-mcp\nnpm notice version: 0.1.1\nnpm notice filename: cs-agent-mcp-0.1.1.tgz\nnpm notice package size: 281.3 kB\nnpm notice unpacked size: 1.3 MB\nnpm notice shasum: 5e4c86e9086fe88485d478336df043b27f32cdbf\nnpm notice integrity: sha512-bokmvy0TP11rY[...]FkWRdSGConf1Q==\nnpm notice total files: 7\nnpm notice\n",
+      "id": "CMD-001",
+      "core": true,
+      "failure_handling": "fix-or-block"
+    },
+    {
+      "command": "node dist/mcp-cli.js --help",
+      "exit_code": 0,
+      "stdout": "Usage: cs-agent-mcp [options] [command]\n\n通过 MCP 创建、调用和编排本机编码 Agent\n\nOptions:\n  -V, --version  output the version number\n  --cwd <path>   未提供 MCP workspace roots 时使用的工作目录 (default:\n                 \"/Users/wyattfang/work/cs-agent-mcp\")\n  -h, --help     display help for command\n\nCommands:\n  agents         查看本机 cs-agent-mcp Agent 诊断状态\n",
+      "stderr": "",
+      "id": "CMD-002",
+      "core": false,
+      "failure_handling": "fix-or-block"
+    },
+    {
+      "command": "node dist/mcp-cli.js agents --help",
+      "exit_code": 0,
+      "stdout": "Usage: cs-agent-mcp agents [options] [command]\n\n查看本机 cs-agent-mcp Agent 诊断状态\n\nOptions:\n  -h, --help                         display help for command\n\nCommands:\n  list [options]                     列出本机可见 Agent\n  status [options] <agent-selector>  查看单个 Agent 状态\n  attach [options] <agent-selector>  只读跟随单个 Agent 的事件\n  help [command]                     display help for command\n",
+      "stderr": "",
+      "id": "CMD-003",
+      "core": true,
+      "failure_handling": "fix-or-block"
+    }
+  ],
+  "providers": {}
+}

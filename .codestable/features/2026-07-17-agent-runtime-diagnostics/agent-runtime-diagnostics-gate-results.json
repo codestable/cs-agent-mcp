@@ -1,0 +1,29 @@
+{
+  "gate_id": "scope-gate",
+  "stage": "qa",
+  "status": "passed",
+  "blocking": [],
+  "warnings": [],
+  "evidence": [
+    {
+      "changed_files": [],
+      "ignored_machine_artifacts": [],
+      "allowed_prefixes": [
+        ".codestable/features/2026-07-17-agent-runtime-diagnostics",
+        "src/mcp-cli.ts",
+        "src/mcp/diagnostics",
+        "src/mcp/transport/process-lock.ts",
+        "test/agent-diagnostics.test.ts",
+        "test/mcp-cli.test.ts",
+        "scripts/package-smoke.mjs",
+        "package.json",
+        "tsconfig.test.json",
+        "README.md",
+        "CHANGELOG.md",
+        "docs/MCP_ARCHITECTURE.md",
+        ".codestable/requirements/agent-runtime-diagnostics.md"
+      ]
+    }
+  ],
+  "providers": {}
+}

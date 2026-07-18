@@ -1,7 +1,7 @@
 feature: "2026-07-17-agent-runtime-diagnostics"
 status: ready
 baseline_ref: "23bd73868624ea843807a602ba550e1c803aa63d"
-stage: qa
+stage: acceptance
 driver_kind: paseo
 driver_id: "e0827d08-b552-420e-8c05-507137744ba3"
 handoff_reason: ""
