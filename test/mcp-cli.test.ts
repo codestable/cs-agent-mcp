@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -83,6 +83,30 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<voi
     }
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
+}
+
+async function waitForChildExit(child: ChildProcess, timeoutMs: number): Promise<number | null> {
+  return await new Promise<number | null>((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timer);
+      child.off("error", onError);
+      child.off("exit", onExit);
+    };
+    const onError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+    const onExit = (code: number | null) => {
+      cleanup();
+      resolve(code);
+    };
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error("Timed out waiting for child process exit"));
+    }, timeoutMs);
+    child.once("error", onError);
+    child.once("exit", onExit);
+  });
 }
 
 function diagnosticSnapshot(agents: FacadeSnapshot["agents"]): FacadeSnapshot {
@@ -533,6 +557,72 @@ test("cs-agent-mcp serves the facade over stdio", async (t) => {
   assert.match(maxTurnsDescription, /agentic turns/);
   assert.match(maxTurnsDescription, /8-12/);
   assert.match(maxTurnsDescription, /omit/);
+});
+
+test("cs-agent-mcp exits and releases its workspace lock when stdin disconnects", async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "cs-agent-mcp-stdin-close-"));
+  const workspace = path.join(home, "workspace");
+  await fs.mkdir(workspace, { recursive: true });
+  t.after(async () => await fs.rm(home, { recursive: true, force: true }));
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const child = spawn(process.execPath, [CLI_PATH, "--cwd", workspace], {
+      env: { ...process.env, HOME: home },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    t.after(() => child.kill("SIGKILL"));
+
+    child.stdin.write(
+      `${JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-06-18",
+          capabilities: {},
+          clientInfo: { name: "stdin-close-test", version: "1.0.0" },
+        },
+      })}\n`,
+    );
+    await waitFor(() => stdout.includes('"id":1'));
+    child.stdin.write(
+      `${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`,
+    );
+    child.stdin.write(
+      `${JSON.stringify({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: { name: "cs_agent_capabilities", arguments: {} },
+      })}\n`,
+    );
+    await waitFor(() => stdout.includes('"id":2'), 5_000);
+
+    const facadesDir = path.join(home, ".cs-agent-mcp", "mcp", "facades");
+    const lockName = (await fs.readdir(facadesDir)).find((name) => name.endsWith(".lock"));
+    assert.ok(lockName, `workspace lock was not created; stderr: ${stderr}`);
+    const lockPath = path.join(facadesDir, lockName);
+
+    child.stdin.end();
+    const exitCode = await waitForChildExit(child, 5_000).catch((error: unknown) => {
+      throw new Error(
+        `MCP process did not exit after stdin close: ${stderr || (error instanceof Error ? error.message : String(error))}`,
+      );
+    });
+
+    assert.equal(exitCode, 0, stderr);
+    await assert.rejects(fs.access(lockPath), { code: "ENOENT" });
+  }
 });
 
 test("cs-agent-mcp honors one MCP workspace root and requires cwd when roots are ambiguous", async (t) => {

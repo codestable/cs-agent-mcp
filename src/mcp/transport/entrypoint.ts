@@ -43,7 +43,32 @@ type RunningFacade = {
   close(): Promise<void>;
 };
 
+type StreamDisconnect = {
+  closed: Promise<void>;
+  dispose(): void;
+};
+
 const ROOTS_REQUEST_TIMEOUT_MS = 5_000;
+
+function observeStreamDisconnect(stream: NodeJS.ReadStream): StreamDisconnect {
+  let resolveClosed: () => void = () => undefined;
+  const closed = new Promise<void>((resolve) => {
+    resolveClosed = resolve;
+  });
+  const onClosed = () => resolveClosed();
+  stream.once("end", onClosed);
+  stream.once("close", onClosed);
+  if (stream.readableEnded || stream.destroyed) {
+    resolveClosed();
+  }
+  return {
+    closed,
+    dispose(): void {
+      stream.off("end", onClosed);
+      stream.off("close", onClosed);
+    },
+  };
+}
 
 function facadeFilePath(stateKey: string): string {
   const workspaceKey = createHash("sha256").update(stateKey).digest("hex").slice(0, 24);
@@ -263,11 +288,13 @@ export async function runMcpServer(options: RunMcpServerOptions): Promise<void> 
     rootMcpServer.server.onclose = resolve;
   });
   const stdio = new StdioServerTransport();
+  const stdinDisconnect = observeStreamDisconnect(process.stdin);
 
   try {
     await rootMcpServer.connect(stdio);
-    await closed;
+    await Promise.race([closed, stdinDisconnect.closed]);
   } finally {
+    stdinDisconnect.dispose();
     await initialization;
     try {
       await running?.close();

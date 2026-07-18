@@ -4,6 +4,13 @@
 
 ## 未发布
 
+## 0.2.3 - 2026-07-18
+
+### MCP 生命周期修复
+
+- stdio 客户端关闭 stdin 或异常退出后，MCP 服务现在会关闭 loopback server、Facade 和 runtime，
+  并释放 workspace lock，避免孤儿进程阻止后续 Codex/Claude 会话启动子 Agent。
+
 ## 0.2.2 - 2026-07-18
 
 ### 实时诊断 TUI
