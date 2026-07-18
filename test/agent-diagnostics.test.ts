@@ -212,8 +212,13 @@ test("agent diagnostics rejects snapshots with malformed consumed nested fields"
     ...snapshot({
       [badAgentId]: {
         ...agent({ agentId: badAgentId }),
-        lastError: { code: "BROKEN", message: 42, retryable: false },
-      } as unknown as FacadeSnapshot["agents"][string],
+        lastError: {
+          code: "BROKEN",
+          message: "broken",
+          retryable: false,
+          details: { runtimeCode: 42 },
+        },
+      },
     }),
   });
   const badTurnAgentId = "47474747-4747-4747-8747-474747474747";
@@ -245,7 +250,7 @@ test("agent diagnostics rejects snapshots with malformed consumed nested fields"
   assert.equal(result.warnings.length, 3);
   assert.match(
     result.warnings.map((warning) => warning.message).join("\n"),
-    /snapshot\.events\.0\.cursor.*snapshot\.agents\..*lastError\.message.*snapshot\.turns\.turn-bad\.pendingPermissionId/s,
+    /snapshot\.events\.0\.cursor.*snapshot\.agents\..*lastError\.details\.runtimeCode.*snapshot\.turns\.turn-bad\.pendingPermissionId/s,
   );
 });
 
@@ -576,7 +581,16 @@ test("agent diagnostics truncates all allowlisted diagnostic text fields", async
     ...snapshot({
       [agentId]: {
         ...agent({ agentId, state: "destroyed" }),
-        lastError: { code: "LONG", message: longText, retryable: false },
+        lastError: {
+          code: "LONG",
+          message: longText,
+          retryable: false,
+          details: {
+            runtimeCode: "E_STATUS",
+            cwd: "/secret/workspace",
+            agentId: "secret-agent",
+          },
+        },
       },
     }),
     events: [
@@ -611,7 +625,11 @@ test("agent diagnostics truncates all allowlisted diagnostic text fields", async
             code: "RUNTIME_FAILURE",
             message: longText,
             retryable: false,
-            runtimeCode: "E_RUNTIME",
+            details: {
+              runtimeCode: "E_RUNTIME",
+              cwd: "/secret/workspace",
+              agentId: "secret-agent",
+            },
             stack: "drop-me",
           },
         },
@@ -639,6 +657,8 @@ test("agent diagnostics truncates all allowlisted diagnostic text fields", async
     : {};
   assert.equal(typeof lastError.message === "string" ? lastError.message.length : 0, 2_000);
   assert.equal(lastError.truncated, true);
+  assert.equal(lastError.runtimeCode, "E_STATUS");
+  assert.equal("details" in lastError, false);
 
   const iterator = diagnostics.attachAgent(agentId, { history: 4 });
   assert.equal(assertTimelineValue(await iterator.next()).kind, "snapshot");
@@ -660,6 +680,11 @@ test("agent diagnostics truncates all allowlisted diagnostic text fields", async
       assert.equal(item.event.detail.retryable, false);
       assert.equal(item.event.detail.runtimeCode, "E_RUNTIME");
       assert.equal("stack" in item.event.detail, false);
+      assert.equal("details" in item.event.detail, false);
     }
   }
+  assert.doesNotMatch(
+    JSON.stringify(await diagnostics.resolveAgent(agentId)),
+    /secret\/workspace|secret-agent|details/,
+  );
 });

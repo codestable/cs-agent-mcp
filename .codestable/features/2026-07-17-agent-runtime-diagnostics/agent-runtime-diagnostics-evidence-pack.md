@@ -187,6 +187,18 @@ fake clock/scheduler 测试，不改变公开 CLI、MCP 工具或持久化 schem
   `{"toolCount":13,"lifecycle":"ok","diagnostics":"ok"}`。
 - 清洁度：format、type-aware lint、typecheck、全量 test 与 pack dry-run 均通过，无方案外文件或临时痕迹。
 
+## Review-fix Round 4
+
+- Review input：`agent-runtime-diagnostics-review.md` round 4，结论为 `changes-requested`。
+- 修复范围：REV-022；只修 Facade error details 的单字段读取和真实 fixture。
+- RED：fixture 改为真实 `error.details.runtimeCode` 后，malformed details snapshot 被错误接受，status 的
+  runtimeCode 为 undefined，证明原顶层读取路径不可达。
+- GREEN：terminal projector 与 status sanitizer 共用 `runtimeCodeFromError`，只读取
+  `details.runtimeCode`；parser 对该可选字段做 string 校验；`details/cwd/agentId/stack` 永不输出。
+- VERIFY：diagnostics 8/8；完整 `pnpm run check` 退出 0；package smoke 输出
+  `{"toolCount":13,"lifecycle":"ok","diagnostics":"ok"}`。
+- 清洁度：format、lint、typecheck、全量 test 与 pack dry-run 通过，无 details spread 或方案外改动。
+
 ## 验收场景自检
 
 - 无参数 stdio 和 13 MCP 工具生命周期：`mcp-cli.test`、`mcp-e2e.test`、package smoke 覆盖。

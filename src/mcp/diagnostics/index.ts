@@ -770,11 +770,12 @@ function projectTerminalTurn(
   eventType: "turn.failed" | "turn.completed" | "turn.cancelled",
 ): Record<string, unknown> & { summary?: string } {
   const detail = pickScalars(data, ["stopReason", "reason"], eventType);
-  const error = pickScalars(
-    asRecord(data.error),
-    ["code", "message", "retryable", "runtimeCode"],
-    eventType,
-  );
+  const errorRecord = asRecord(data.error);
+  const error = pickScalars(errorRecord, ["code", "message", "retryable"], eventType);
+  const runtimeCode = runtimeCodeFromError(errorRecord);
+  if (runtimeCode !== undefined) {
+    error.runtimeCode = runtimeCode;
+  }
   const { summary, ...errorFields } = error;
   Object.assign(detail, errorFields);
   if (summary !== eventType) {
@@ -1107,7 +1108,10 @@ function parseError(value: unknown, name: string): void {
   requireString(record.code, `${name}.code`);
   requireString(record.message, `${name}.message`);
   requireBoolean(record.retryable, `${name}.retryable`);
-  requireOptionalString(record.runtimeCode, `${name}.runtimeCode`);
+  if (record.details !== undefined) {
+    const details = requireRecord(record.details, `${name}.details`);
+    requireOptionalString(details.runtimeCode, `${name}.details.runtimeCode`);
+  }
 }
 
 function parsePermission(permissionId: string, value: unknown): void {
@@ -1190,15 +1194,19 @@ function toDiagnosticPermission(
 
 function sanitizeError(error: FacadeErrorShape): DiagnosticErrorShape {
   const message = truncateText(error.message);
+  const runtimeCode = runtimeCodeFromError(error);
   return {
     code: error.code,
     message: message.text,
     retryable: error.retryable,
-    ...("runtimeCode" in error && typeof error.runtimeCode === "string"
-      ? { runtimeCode: error.runtimeCode }
-      : {}),
+    ...(runtimeCode !== undefined ? { runtimeCode } : {}),
     ...(message.truncated ? { truncated: true } : {}),
   };
+}
+
+function runtimeCodeFromError(value: unknown): string | undefined {
+  const details = asRecord(asRecord(value).details);
+  return typeof details.runtimeCode === "string" ? details.runtimeCode : undefined;
 }
 
 function inferPermissionKind(request: Permission["request"]): string | undefined {

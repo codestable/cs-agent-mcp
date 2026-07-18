@@ -4,7 +4,7 @@ feature: 2026-07-17-agent-runtime-diagnostics
 status: changes-requested
 reviewer: subagent+ocr
 reviewed: 2026-07-18
-round: 3
+round: 4
 ---
 
 # Agent 运行状态诊断 CLI 代码审查报告
@@ -14,34 +14,34 @@ round: 3
 - Design: `.codestable/features/2026-07-17-agent-runtime-diagnostics/agent-runtime-diagnostics-design.md`
 - Checklist: `.codestable/features/2026-07-17-agent-runtime-diagnostics/agent-runtime-diagnostics-checklist.yaml`
 - Evidence pack: `.codestable/features/2026-07-17-agent-runtime-diagnostics/agent-runtime-diagnostics-evidence-pack.md`
-- Gate results: none（implementation evidence 与 checklist DoD 命令作为本轮输入）
-- DoD results: none（结果记录在 evidence pack 与 goal-state ledger）
-- Implementation evidence: baseline `23bd738` 至 HEAD `20a2f8d`；重点 review-fix 为 `6da73c9..20a2f8d`
-- Diff basis: 完整 feature diff + round 2 review-fix diff
+- Gate results: none（implementation evidence 与 checklist DoD 命令作为输入）
+- DoD results: none（结果记录在 evidence pack 与 ledger）
+- Implementation evidence: baseline `23bd738` 至 HEAD `585a37e`；重点 diff `20a2f8d..585a37e`
+- Diff basis: 完整 feature diff + round 3 review-fix
 - Baseline dirty files: none
 
 ### Independent Review
 
 - Detection: Paseo `claude/opus` plan mode 与 OCR CLI 均完成
-- 环节 A 独立隔离 Task agent: paseo + completed（agent `b323f160-224e-463d-8127-cee8f1ebd50e`）
-- 环节 B OCR CLI: completed，`6da73c9..HEAD` 0 comments
+- 环节 A 独立隔离 Task agent: paseo + completed（agent `9b857bd2-2de5-4eec-940a-8669465e8fcb`）
+- 环节 B OCR CLI: completed，`20a2f8d..HEAD` 0 comments
 - OCR severity mapping: High→blocking/important, Medium→nit/suggestion, Low→discarded
-- Merge policy: 独立 reviewer finding 已用 Facade 真实 appendEvent data 形状本地核验
-- Gate effect: terminal event 投影 fixture 与真实 shape 不一致，阻止进入 QA
+- Merge policy: finding 已与 `FacadeErrorShape` 和 Facade 写入 `details.runtimeCode` 的源码交叉核验
+- Gate effect: runtimeCode 读取深度与真实 schema 不一致，阻止进入 QA
 
 ## 2. Diff Summary
 
-- 新增：diagnostics 模块、agent diagnostics 测试、goal 执行包与 evidence pack
-- 修改：CLI、process lock probe、package smoke、测试与用户/架构/requirement 文档
+- 新增：diagnostics 模块、测试、goal 执行包与 evidence pack
+- 修改：CLI、lock probe、package smoke、测试和文档
 - 删除：none
 - 未跟踪 / staged：none
-- 风险热点：Facade event data 与 diagnostics allowlist 的跨模块契约、generation 时序、不可信 snapshot
+- 风险热点：开放 error details 袋的单字段脱敏、writer/reader fixture 一致性
 
 ## 3. Adversarial Pass
 
-- 假设的生产 bug：测试 fixture 与 Facade 实际 event data 层级不同，导致绿灯无法证明真实投影。
-- 主动攻击过的反例：`turn.failed` 的 `data.error`、`turn.completed` 的 `stopReason+error`、`turn.cancelled` 的 `reason`。
-- 结果：发现一项 important 假阳性；round 2 generation、nested、截断与 package smoke 修复均确认成立。
+- 假设的生产 bug：terminal event 的一级 error shape 修正后，error 内部仍有更深的实际字段层级。
+- 主动攻击过的反例：真实 `FacadeErrorShape.details.runtimeCode`，以及 details 中混入 cwd/agentId/cause。
+- 结果：发现一项 important；code/message/retryable、reason/stopReason、截断与 poison 丢弃均确认成立。
 
 ## 4. Findings
 
@@ -51,43 +51,41 @@ round: 3
 
 ### important
 
-- [ ] REV-017 `src/mcp/diagnostics/index.ts:754` terminal turn event 的投影层级与 Facade 真实 data shape 不一致。（Paseo）
-  - Evidence: projector 从顶层读取 `code/message/retryable/runtimeCode`，但 Facade 的 failed/completed 写入 `data.error.*`；cancelled 写入 `data.reason`。现有超长 failed fixture 使用错误的扁平 `{message}`，形成测试假阳性。
-  - Impact: attach 时间线丢失失败 code/message 和取消原因，违反事件 allowlist 与“最近发生了什么错误”的成功标准；真实 failed error 截断路径也未执行。
-  - Expected fix scope: 只在 diagnostics 投影层读取 `data.error` 并归一 `reason/stopReason`，不透传 error 对象；测试改用真实 Facade data shape。
+- [ ] REV-022 `src/mcp/diagnostics/index.ts:773` runtimeCode 从错误层级读取，真实 status/attach 恒缺失。（Paseo）
+  - Evidence: `FacadeErrorShape` 只有 `details?: Record<string,unknown>`；Facade 唯一写入路径是 `error.details.runtimeCode`。projector、`sanitizeError`、`parseError` 均按顶层 `error.runtimeCode` 处理，测试也构造了生产不会生成的顶层 fixture。
+  - Impact: 设计白名单承诺的 runtimeCode 在生产不可达，round 3 测试为假阳性。
+  - Expected fix scope: 只从 `error.details.runtimeCode` 读取一个字符串字段；不透传/展开 details；fixture 改为真实 shape 并加入 details poison 负向断言。
 
 ### nit
 
-- [ ] REV-018 `src/mcp/diagnostics/index.ts:882` `stopReason/reason/tag` 尚未纳入明确文本字段截断集合。（Paseo）
-- [ ] REV-019 status/list 文本信息密度与列对齐仍可改善；JSON DTO 完整，不阻塞本轮。
-- [ ] REV-020 多实例 list/status 串行 I/O，实例很多时启动延迟线性累积。（OCR round 2）
+- none
 
 ### suggestion
 
-- [ ] REV-021 在 Facade entrypoint 的“先 acquire lock 后首次 snapshot write”处增加 generation 隔离不变量注释。
+- [ ] REV-023 `projectTerminalTurn` 可用一行注释说明 error message 优先于 stopReason 作为 summary。
 
 ### learning
 
-- allowlist 测试必须来自 writer 的真实持久化 shape；手工构造更方便的扁平 fixture 会把不可达代码误当成已覆盖。
+- writer shape 的真实性需要递归到开放 details 袋；只校验一级对象仍可能保留不可达的假 fixture。
 
 ### praise
 
-- generation replacement 在首次 probe、reread 和 final drain 后均有 token 双检，新 generation events 不会进入旧 attach。
-- Agent/Turn/Event consumed nested fail-closed、文本截断、package smoke `close` 与只读边界均已核验成立。
+- round 3 已正确修复 code/message/retryable、cancel reason 与文本截断，stack/cause 仍 fail-closed。
+- generation replacement、stopped drain、nested fail-closed、package smoke 与只读边界未被触碰。
 
 ## 5. Test And QA Focus
 
-- QA 必须重点复核：真实 `{stopReason,error:{...}}` 和 `{reason}` terminal events；超长 error/stopReason/tag；replacement reread race；stopped/unknown final drain。
-- Evidence pack residual risks / gate warnings：replacement 依赖“先 acquire lock 后写 snapshot”启动顺序；独立 npm cache 规避本机 npm cache EPERM。
-- 建议新增或加强的测试：使用 Facade writer shape 的 failed/completed/cancelled 投影 fixture。
-- 不能靠 review 完全确认的点：Node permission child、真实 tarball 临时安装、跨平台 `fs.watch`。
+- QA 必须重点复核：真实 `details.runtimeCode` 在 status/attach 可见，但 details、cwd、agentId 等其他字段完全不可见。
+- Evidence pack residual risks / gate warnings：开放 details 袋未来新增字段时必须继续默认丢弃；独立 npm cache 规避本机 npm cache EPERM。
+- 建议新增或加强的测试：真实 error details fixture与 poison fields；尽可能用 Facade 真 snapshot 端到端验证。
+- 不能靠 review 完全确认的点：Node permission child、真实 tarball 临时安装、跨平台 watcher。
 
 ## 6. Residual Risk
 
-- replacement 无法从复用 snapshot 文件可靠恢复未观察到的旧代尾事件，generation 隔离优先。
-- stale PID 复用、跨平台 watcher 通知差异和单次 O(file size) 解析为 design 已接受风险。
+- `error.details` 是开放字段袋；安全依赖 diagnostics 永远只按单字段 allowlist 提取 runtimeCode。
+- replacement 尾事件、stale PID、watcher 差异和单次 O(file size) 解析维持既有 residual risk。
 
 ## 7. Verdict
 
 - Status: changes-requested
-- Next: 来源实现技能 review-fix；修复 REV-017，并将 REV-018 纳入同一文本边界后重跑独立 review。
+- Next: 来源实现技能 review-fix；修复 REV-022 后重跑独立 review。
