@@ -156,6 +156,24 @@ fake clock/scheduler 测试，不改变公开 CLI、MCP 工具或持久化 schem
 - 清洁度：`pnpm run format:check`、`git diff --check` 通过；移除 terminal exit code 死赋值及其孤儿 helper，
   无新增 debug output、TODO/FIXME/XXX、注释旧代码或无用 import。
 
+## Review-fix Round 2
+
+- Review input：`agent-runtime-diagnostics-review.md` round 2，结论为 `changes-requested`。
+- 修复范围：REV-008 至 REV-011；未改变公开 CLI、13 个 MCP 工具、Facade schema 或只读边界。
+- RED：定向测试 3/8 失败，分别证明 replacement 仍输出新 generation event、损坏 Agent/Turn optional
+  nested 字段未 fail-closed、allowlisted error/text/title 保留 2,001 code points。
+- GREEN：follow 把 snapshot/liveness/replacement observation 分流；任何阶段观察到新 token 都直接输出
+  `instance_replaced` 且不 drain 该 snapshot；stopped/unknown 保留最终 drain。Agent/Turn consumed optional
+  字段与 error shape 增加 L3 校验；明确文本字段和 diagnostics error message 统一截断并传播
+  `truncated=true`；package smoke 等待 child `close` 并在失败时展示 stderr。
+- VERIFY：diagnostics 8/8；type-aware lint、format、docs、typecheck、build、全量 test、独立 npm cache 下
+  pack dry-run 均通过；完整 `pnpm run check` 退出 0；package smoke 输出
+  `{"toolCount":13,"lifecycle":"ok","diagnostics":"ok"}`。
+- TDD exception：package smoke `exit`→`close` 为测试基础设施时序修正，使用 OCR 可复现的 Node child
+  stdio 生命周期事实和实际 package smoke 作为替代证据。
+- 清洁度：删除 replacement 旧断言留下的未使用 helper；复杂度通过等价小函数提取回到 lint 阈值内；
+  无新增 debug output、TODO/FIXME/XXX、注释旧代码或无用 import。
+
 ## 验收场景自检
 
 - 无参数 stdio 和 13 MCP 工具生命周期：`mcp-cli.test`、`mcp-e2e.test`、package smoke 覆盖。

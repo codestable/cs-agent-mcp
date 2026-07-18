@@ -17,6 +17,7 @@ type DiagnosticErrorShape = {
   message: string;
   retryable: boolean;
   runtimeCode?: string;
+  truncated?: boolean;
 };
 
 export type ObservedFacadeInstance = {
@@ -201,6 +202,8 @@ type PreparedAttach = {
 const SNAPSHOT_FILE_PATTERN = /^[0-9a-f]{24}\.json$/;
 const FULL_AGENT_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MIN_REREAD_INTERVAL_MS = 250;
+const TRUNCATED_DETAIL_KEYS = new Set(["text", "title", "message"]);
+const SUMMARY_DETAIL_KEYS = new Set(["text", "title", "state", "message"]);
 const FACADE_EVENT_TYPES = [
   "audit.mutation",
   "agent.created",
@@ -431,8 +434,17 @@ export function createAgentDiagnostics(options: AgentDiagnosticsOptions = {}): A
       exitCode: number;
     };
   }> {
-    if (!(await targetChanged(state.target.readable))) {
+    const change = await observeTargetChange(state.target.readable);
+    if (change === "none") {
       return { state, events: [], replaced: false };
+    }
+    if (change === "replacement") {
+      return {
+        state,
+        events: [],
+        replaced: true,
+        terminal: { reason: "instance_replaced", exitCode: 1 },
+      };
     }
     const next = await rereadAttachedTarget(state);
     if (!next.found) {
@@ -443,7 +455,24 @@ export function createAgentDiagnostics(options: AgentDiagnosticsOptions = {}): A
         terminal: { reason: "instance_unknown", exitCode: 1 },
       };
     }
-    const drained = await finalDrainIfInstanceTerminating({ ...state, target: next.target });
+    const refreshed = { ...state, target: next.target };
+    if (isReplacement(refreshed)) {
+      return {
+        state: refreshed,
+        events: [],
+        replaced: true,
+        terminal: { reason: "instance_replaced", exitCode: 1 },
+      };
+    }
+    const drained = await finalDrainIfInstanceTerminating(refreshed);
+    if (isReplacement(drained)) {
+      return {
+        state: drained,
+        events: [],
+        replaced: true,
+        terminal: { reason: "instance_replaced", exitCode: 1 },
+      };
+    }
     const events = eventsAfter(
       drained.target.readable.snapshot,
       drained.target.agent.agentId,
@@ -452,35 +481,33 @@ export function createAgentDiagnostics(options: AgentDiagnosticsOptions = {}): A
     return {
       state: {
         ...drained,
-        cursor: events.at(-1) ? Number.parseInt(events.at(-1)?.cursor ?? "0", 10) : state.cursor,
+        cursor: cursorAfter(events, state.cursor),
       },
       events,
-      replaced: isReplacement(drained),
-      terminal: isReplacement(drained)
-        ? { reason: "instance_replaced", exitCode: 1 }
-        : terminalFor(drained.target),
+      replaced: false,
+      terminal: terminalFor(drained.target),
     };
   }
 
-  async function targetChanged(readable: ReadableInstance): Promise<boolean> {
+  async function observeTargetChange(
+    readable: ReadableInstance,
+  ): Promise<"none" | "snapshot" | "liveness" | "replacement"> {
     const [snapshotSignature, lockProbe] = await Promise.all([
       fileSignature(readable.instance.snapshotPath),
       probeLock(`${readable.instance.snapshotPath}.lock`),
     ]);
-    return (
-      snapshotSignature !== readable.snapshotSignature ||
-      lockProbe.state !== readable.instance.state ||
-      (lockProbe.state === "running" && lockProbe.token !== readable.generation)
-    );
+    if (lockProbe.state === "running" && lockProbe.token !== readable.generation) {
+      return "replacement";
+    }
+    if (lockProbe.state !== readable.instance.state) {
+      return "liveness";
+    }
+    return snapshotSignature === readable.snapshotSignature ? "none" : "snapshot";
   }
 
   async function finalDrainIfInstanceTerminating(state: AttachState): Promise<AttachState> {
     const terminal = terminalFor(state.target);
-    if (
-      !isReplacement(state) &&
-      terminal?.reason !== "instance_stopped" &&
-      terminal?.reason !== "instance_unknown"
-    ) {
+    if (terminal?.reason !== "instance_stopped" && terminal?.reason !== "instance_unknown") {
       return state;
     }
     await sleep(finalDrainMs, scheduler);
@@ -493,10 +520,9 @@ export function createAgentDiagnostics(options: AgentDiagnosticsOptions = {}): A
 
   function isReplacement(state: AttachState): boolean {
     return (
-      state.target.readable.instance.instanceId !== state.initialInstanceId ||
-      (state.initialGeneration !== undefined &&
-        state.target.readable.generation !== undefined &&
-        state.target.readable.generation !== state.initialGeneration)
+      state.initialGeneration !== undefined &&
+      state.target.readable.generation !== undefined &&
+      state.target.readable.generation !== state.initialGeneration
     );
   }
 
@@ -656,6 +682,11 @@ function maxCursor(events: FacadeEvent[]): number {
   return events.reduce((max, event) => Math.max(max, Number.parseInt(event.cursor, 10) || 0), 0);
 }
 
+function cursorAfter(events: FacadeEvent[], fallback: number): number {
+  const last = events.at(-1);
+  return last ? Number.parseInt(last.cursor, 10) : fallback;
+}
+
 function compareEventCursor(left: FacadeEvent, right: FacadeEvent): number {
   return Number.parseInt(left.cursor, 10) - Number.parseInt(right.cursor, 10);
 }
@@ -810,13 +841,28 @@ function pickScalars(
   for (const key of keys) {
     const value = data[key];
     if (isScalar(value) || isScalarArray(value)) {
-      detail[key] = value;
-      if (key === "text" || key === "title" || key === "state" || key === "message") {
-        detail.summary = String(value);
+      const projected = projectDetailScalar(key, value);
+      detail[key] = projected.value;
+      if (projected.truncated) {
+        detail.truncated = true;
+      }
+      if (SUMMARY_DETAIL_KEYS.has(key)) {
+        detail.summary = String(detail[key]);
       }
     }
   }
   return detail;
+}
+
+function projectDetailScalar(
+  key: string,
+  value: string | number | boolean | Array<string | number | boolean>,
+): { value: typeof value; truncated: boolean } {
+  if (typeof value !== "string" || !TRUNCATED_DETAIL_KEYS.has(key)) {
+    return { value, truncated: false };
+  }
+  const projected = truncateText(value);
+  return { value: projected.text, truncated: projected.truncated };
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -1005,6 +1051,21 @@ function parseAgent(agentId: string, value: unknown): void {
   requireNumber(record.queueDepth, `snapshot.agents.${agentId}.queueDepth`);
   requireString(record.createdAt, `snapshot.agents.${agentId}.createdAt`);
   requireString(record.updatedAt, `snapshot.agents.${agentId}.updatedAt`);
+  requireOptionalString(record.parentAgentId, `snapshot.agents.${agentId}.parentAgentId`);
+  requireOptionalString(record.name, `snapshot.agents.${agentId}.name`);
+  requireOptionalString(record.activeTurnId, `snapshot.agents.${agentId}.activeTurnId`);
+  if (record.sessionOptions !== undefined) {
+    const sessionOptions = requireRecord(
+      record.sessionOptions,
+      `snapshot.agents.${agentId}.sessionOptions`,
+    );
+    if (sessionOptions.maxTurns !== undefined) {
+      requireNumber(sessionOptions.maxTurns, `snapshot.agents.${agentId}.sessionOptions.maxTurns`);
+    }
+  }
+  if (record.lastError !== undefined) {
+    parseError(record.lastError, `snapshot.agents.${agentId}.lastError`);
+  }
 }
 
 function parseTurn(turnId: string, value: unknown): void {
@@ -1018,6 +1079,21 @@ function parseTurn(turnId: string, value: unknown): void {
   );
   requireNumber(record.revision, `snapshot.turns.${turnId}.revision`);
   requireString(record.createdAt, `snapshot.turns.${turnId}.createdAt`);
+  requireOptionalString(record.pendingPermissionId, `snapshot.turns.${turnId}.pendingPermissionId`);
+  requireOptionalString(record.stopReason, `snapshot.turns.${turnId}.stopReason`);
+  requireOptionalString(record.startedAt, `snapshot.turns.${turnId}.startedAt`);
+  requireOptionalString(record.completedAt, `snapshot.turns.${turnId}.completedAt`);
+  if (record.error !== undefined) {
+    parseError(record.error, `snapshot.turns.${turnId}.error`);
+  }
+}
+
+function parseError(value: unknown, name: string): void {
+  const record = requireRecord(value, name);
+  requireString(record.code, `${name}.code`);
+  requireString(record.message, `${name}.message`);
+  requireBoolean(record.retryable, `${name}.retryable`);
+  requireOptionalString(record.runtimeCode, `${name}.runtimeCode`);
 }
 
 function parsePermission(permissionId: string, value: unknown): void {
@@ -1099,13 +1175,15 @@ function toDiagnosticPermission(
 }
 
 function sanitizeError(error: FacadeErrorShape): DiagnosticErrorShape {
+  const message = truncateText(error.message);
   return {
     code: error.code,
-    message: error.message,
+    message: message.text,
     retryable: error.retryable,
     ...("runtimeCode" in error && typeof error.runtimeCode === "string"
       ? { runtimeCode: error.runtimeCode }
       : {}),
+    ...(message.truncated ? { truncated: true } : {}),
   };
 }
 
@@ -1137,6 +1215,19 @@ function requireArray(value: unknown, name: string): unknown[] {
 
 function requireString(value: unknown, name: string): string {
   if (typeof value !== "string") {
+    throw new Error(`Invalid ${name}`);
+  }
+  return value;
+}
+
+function requireOptionalString(value: unknown, name: string): void {
+  if (value !== undefined) {
+    requireString(value, name);
+  }
+}
+
+function requireBoolean(value: unknown, name: string): boolean {
+  if (typeof value !== "boolean") {
     throw new Error(`Invalid ${name}`);
   }
   return value;

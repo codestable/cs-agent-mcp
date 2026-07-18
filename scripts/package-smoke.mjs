@@ -72,7 +72,7 @@ async function runBinary(args) {
   });
   const code = await new Promise((resolve, reject) => {
     child.on("error", reject);
-    child.on("exit", resolve);
+    child.on("close", resolve);
   });
   return { code, stdout, stderr };
 }
@@ -131,13 +131,13 @@ try {
   assert.equal(destroyed.structuredContent?.agent?.state, "destroyed");
 
   const agentsHelp = await runBinary(["agents", "--help"]);
-  assert.equal(agentsHelp.code, 0);
+  assert.equal(agentsHelp.code, 0, agentsHelp.stderr);
   assert.match(agentsHelp.stdout, /list/);
   assert.match(agentsHelp.stdout, /status/);
   assert.match(agentsHelp.stdout, /attach/);
 
   const agentsList = await runBinary(["agents", "list", "--all", "--json"]);
-  assert.equal(agentsList.code, 0);
+  assert.equal(agentsList.code, 0, agentsList.stderr);
   const listJson = JSON.parse(agentsList.stdout);
   assert.equal(
     listJson.agents.some((agent) => agent.agentId === agentId),
@@ -145,11 +145,11 @@ try {
   );
 
   const agentsStatus = await runBinary(["agents", "status", agentId, "--json"]);
-  assert.equal(agentsStatus.code, 0);
+  assert.equal(agentsStatus.code, 0, agentsStatus.stderr);
   assert.equal(JSON.parse(agentsStatus.stdout).agent.agentId, agentId);
 
   const agentsAttach = await runBinary(["agents", "attach", agentId, "--history", "1", "--json"]);
-  assert.equal(agentsAttach.code, 0);
+  assert.equal(agentsAttach.code, 0, agentsAttach.stderr);
   assert.match(agentsAttach.stdout, /"kind":"terminal"/);
   assert.match(agentsAttach.stdout, /"reason":"agent_destroyed"/);
 

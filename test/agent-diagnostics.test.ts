@@ -49,25 +49,6 @@ async function writeJson(filePath: string, value: unknown): Promise<void> {
   await fs.writeFile(filePath, `${JSON.stringify(value)}\n`, "utf8");
 }
 
-async function nextWithTimeout<T>(
-  iterator: AsyncGenerator<T, number>,
-  timeoutMs: number,
-): Promise<IteratorResult<T, number> | "timeout"> {
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      iterator.next(),
-      new Promise<"timeout">((resolve) => {
-        timeout = setTimeout(() => resolve("timeout"), timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-  }
-}
-
 function assertTimelineValue<T>(result: IteratorResult<T, number>): T {
   assert.equal(result.done, false);
   return result.value;
@@ -208,7 +189,7 @@ test("agent diagnostics resolves selectors across the full readable set and fail
   assert.match(ambiguous.ok ? "" : ambiguous.message, /complete agent id/i);
 });
 
-test("agent diagnostics rejects snapshots with malformed nested events", async (t) => {
+test("agent diagnostics rejects snapshots with malformed consumed nested fields", async (t) => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "cs-agent-diagnostics-event-schema-"));
   t.after(async () => await fs.rm(directory, { recursive: true, force: true }));
   const instanceId = "cdcdcdcdcdcdcdcdcdcdcdcd";
@@ -226,6 +207,34 @@ test("agent diagnostics rejects snapshots with malformed nested events", async (
       },
     ],
   });
+  const badAgentId = "46464646-4646-4646-8646-464646464646";
+  await writeJson(path.join(directory, "cececececececececececece.json"), {
+    ...snapshot({
+      [badAgentId]: {
+        ...agent({ agentId: badAgentId }),
+        lastError: { code: "BROKEN", message: 42, retryable: false },
+      } as unknown as FacadeSnapshot["agents"][string],
+    }),
+  });
+  const badTurnAgentId = "47474747-4747-4747-8747-474747474747";
+  await writeJson(path.join(directory, "cfcfcfcfcfcfcfcfcfcfcfcf.json"), {
+    ...snapshot({
+      [badTurnAgentId]: {
+        ...agent({ agentId: badTurnAgentId }),
+        activeTurnId: "turn-bad",
+      },
+    }),
+    turns: {
+      "turn-bad": {
+        turnId: "turn-bad",
+        agentId: badTurnAgentId,
+        state: "waiting_permission",
+        revision: 1,
+        pendingPermissionId: 99,
+        createdAt: now,
+      },
+    },
+  });
   const diagnostics = createAgentDiagnostics({
     facadesDir: directory,
     probeLock: async () => ({ state: "running", pid: 123, token: "token", createdAt: now }),
@@ -233,11 +242,14 @@ test("agent diagnostics rejects snapshots with malformed nested events", async (
 
   const result = await diagnostics.listAgents({ includeAll: true });
   assert.equal(result.agents.length, 0);
-  assert.equal(result.warnings.length, 1);
-  assert.match(result.warnings[0]?.message ?? "", /snapshot\.events\.0\.cursor/);
+  assert.equal(result.warnings.length, 3);
+  assert.match(
+    result.warnings.map((warning) => warning.message).join("\n"),
+    /snapshot\.events\.0\.cursor.*snapshot\.agents\..*lastError\.message.*snapshot\.turns\.turn-bad\.pendingPermissionId/s,
+  );
 });
 
-test("agent diagnostics attach drains cursor events before reporting an instance replacement", async (t) => {
+test("agent diagnostics attach does not cross a replacement generation", async (t) => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "cs-agent-diagnostics-attach-"));
   t.after(async () => await fs.rm(directory, { recursive: true, force: true }));
   const instanceId = "eeeeeeeeeeeeeeeeeeeeeeee";
@@ -298,13 +310,12 @@ test("agent diagnostics attach drains cursor events before reporting an instance
   });
   token = "generation-two";
 
-  const drained = await pending;
-  assert.equal(assertTimelineValue(drained).kind, "event");
-  const terminal = await nextWithTimeout(iterator, 200);
-  assert.notEqual(terminal, "timeout");
-  const terminalItem = terminal === "timeout" ? undefined : assertTimelineValue(terminal);
-  assert.equal(terminalItem?.kind, "terminal");
-  assert.equal(terminalItem?.kind === "terminal" ? terminalItem.reason : "", "instance_replaced");
+  const terminal = assertTimelineValue(await pending);
+  assert.equal(terminal.kind, "terminal");
+  assert.equal(terminal.kind === "terminal" ? terminal.reason : "", "instance_replaced");
+  const done = await iterator.next();
+  assert.equal(done.done, true);
+  assert.equal(done.value, 1);
 });
 
 test("agent diagnostics attach performs a final drain before reporting a stopped instance", async (t) => {
@@ -555,22 +566,46 @@ test("agent diagnostics attach projects event allowlists without poison fields a
   ]);
 });
 
-test("agent diagnostics marks a truncated output summary at the event top level", async (t) => {
+test("agent diagnostics truncates all allowlisted diagnostic text fields", async (t) => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "cs-agent-diagnostics-truncate-"));
   t.after(async () => await fs.rm(directory, { recursive: true, force: true }));
   const instanceId = "343434343434343434343434";
   const agentId = "89898989-8989-4898-8989-898989898989";
+  const longText = "x".repeat(2_001);
   await writeJson(path.join(directory, `${instanceId}.json`), {
-    ...snapshot({ [agentId]: agent({ agentId, state: "destroyed" }) }),
+    ...snapshot({
+      [agentId]: {
+        ...agent({ agentId, state: "destroyed" }),
+        lastError: { code: "LONG", message: longText, retryable: false },
+      },
+    }),
     events: [
       {
         cursor: "1",
         rootExecutionId: "root-1",
-        type: "turn.text_delta",
+        type: "turn.status",
         agentId,
         turnId: "turn-1",
         timestamp: now,
-        data: { stream: "output", text: "x".repeat(2_001) },
+        data: { text: longText },
+      },
+      {
+        cursor: "2",
+        rootExecutionId: "root-1",
+        type: "turn.tool_call",
+        agentId,
+        turnId: "turn-1",
+        timestamp: now,
+        data: { title: longText },
+      },
+      {
+        cursor: "3",
+        rootExecutionId: "root-1",
+        type: "turn.failed",
+        agentId,
+        turnId: "turn-1",
+        timestamp: now,
+        data: { message: longText },
       },
     ],
   });
@@ -579,9 +614,26 @@ test("agent diagnostics marks a truncated output summary at the event top level"
     probeLock: async () => ({ state: "running", pid: 123, token: "token", createdAt: now }),
   });
 
-  const iterator = diagnostics.attachAgent(agentId, { history: 1 });
+  const resolved = await diagnostics.resolveAgent(agentId);
+  assert.equal(resolved.ok, true);
+  const lastError = resolved.ok
+    ? (resolved.agent.lastError as unknown as Record<string, unknown>)
+    : {};
+  assert.equal(typeof lastError.message === "string" ? lastError.message.length : 0, 2_000);
+  assert.equal(lastError.truncated, true);
+
+  const iterator = diagnostics.attachAgent(agentId, { history: 3 });
   assert.equal(assertTimelineValue(await iterator.next()).kind, "snapshot");
-  const item = assertTimelineValue(await iterator.next());
-  assert.equal(item.kind === "event" ? item.event.summary.length : 0, 2_000);
-  assert.equal(item.kind === "event" ? item.event.truncated : false, true);
+  for (const field of ["text", "title", "message"]) {
+    const item = assertTimelineValue(await iterator.next());
+    assert.equal(item.kind === "event" ? item.event.summary.length : 0, 2_000);
+    assert.equal(item.kind === "event" ? item.event.truncated : false, true);
+    assert.equal(
+      item.kind === "event" && typeof item.event.detail[field] === "string"
+        ? item.event.detail[field].length
+        : 0,
+      2_000,
+    );
+    assert.equal(item.kind === "event" ? item.event.detail.truncated : false, true);
+  }
 });
