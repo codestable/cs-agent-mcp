@@ -78,6 +78,33 @@ claude mcp add --scope user cs-agent -- npx -y cs-agent-mcp@latest
 建议先调用 `cs_agent_capabilities` 并通过 `probeAgents` 探测准备使用的 Agent。也可以在
 `agents` 配置中新增或覆盖任何提供 ACP stdio 接口的 Agent。
 
+## 何时使用多 Agent
+
+MCP 初始化信息和工具描述会主动提示调用 Agent 在以下场景考虑委派：
+
+- 任务可以拆成相互独立、可并行验证的子任务。
+- 需要不同 Agent runtime 承担互补角色，例如实现与独立审查。
+- 子任务需要独立上下文、专门约束或较长时间运行，主 Agent 只负责协调结果。
+- 当前结果需要第二个 Agent 给出独立证据，而不是在同一上下文中自我复核。
+
+不要为很小、强顺序依赖、上下文无法独立描述，或当前 Agent 能直接快速完成的工作创建子 Agent。
+委派本身有启动、传递上下文和汇总结果的成本。
+
+异构协作时先用 `cs_agent_capabilities` 探测准备使用的多个 Agent，再根据当前任务给它们分配互补
+角色。服务只报告配置名称、可用性和执行限制，不把容易过期的“某个品牌永远更擅长某类任务”
+写成运行时事实。每个 `cs_agent_send` 都应给出自包含的目标、范围、约束、交付物和验证要求。
+
+推荐工作流：
+
+```text
+cs_agent_capabilities
+  -> cs_agent_create（按独立角色创建一个或多个 Agent）
+  -> cs_agent_send（给每个 Agent 自包含任务）
+  -> cs_agent_wait_message（等待回复或权限请求）
+  -> cs_agent_respond_permission / cs_agent_cancel（按需）
+  -> cs_agent_destroy（不再需要时释放 Agent）
+```
+
 ## 配置
 
 ### 配置服务
@@ -160,8 +187,9 @@ cs-agent-mcp --cwd /absolute/path/to/workspace
 
 ## MCP 能力
 
-典型流程是：先检查能力，再创建子 Agent，发送带幂等键的任务，循环等待结果，最后按需取消
-Turn 或销毁 Agent。
+典型流程是：先检查能力，再按独立角色创建子 Agent，发送带幂等键且可独立执行的任务，循环等待
+结果，最后按需取消 Turn 或销毁 Agent。MCP server instructions、工具 description 和输入 schema
+字段说明都携带这套决策与编排提示，即使宿主只展示 `tools/list` 也能看到关键使用条件。
 
 | 工具                          | 主要参数                                                             | 能力                                                              |
 | ----------------------------- | -------------------------------------------------------------------- | ----------------------------------------------------------------- |

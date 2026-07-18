@@ -84,6 +84,15 @@ Runtime 负责解析内置 Agent 名称、启动 ACP adapter、创建或加载 A
 
 公开 schema 和参数说明以 [README](../README.md#mcp-能力) 为准。
 
+MCP initialize instructions 负责告诉调用 Agent 何时应采用并行、异构或独立审查式委派，以及何时
+不应为简单或强耦合任务增加子 Agent。每个工具 description 进一步说明它在标准
+`capabilities → create → send → wait → destroy` 流程中的位置，输入 schema 对每个顶层参数提供说明；
+annotations 标注只读、幂等和破坏性操作。这些元数据属于 Agent 的运行时决策入口，不能只写在用户
+文档中。
+
+Agent runtime 的品牌能力会随版本和本地配置变化。Facade 因此只报告配置名称、实时可用性和执行
+限制，不硬编码“某个 Agent 永远适合某类任务”；调用者根据当前任务把不同 Agent 分配给互补角色。
+
 ## 执行语义
 
 ### 创建

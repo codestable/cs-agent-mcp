@@ -1047,6 +1047,7 @@ test("MCP server exposes all facade tools and returns structured create results"
   await client.connect(clientTransport);
 
   const tools = await client.listTools();
+  const instructions = client.getInstructions() ?? "";
   const created = await client.callTool({
     name: "cs_agent_create",
     arguments: { agent: "claude" },
@@ -1054,6 +1055,13 @@ test("MCP server exposes all facade tools and returns structured create results"
   const structured = created.structuredContent as { agent?: { agent: string; state: string } };
 
   assert.equal(tools.tools.length, 13);
+  assert.match(instructions, /parallelizable/i);
+  assert.match(instructions, /heterogeneous/i);
+  assert.match(instructions, /do not delegate trivial or tightly coupled work/i);
+  assert.match(
+    instructions,
+    /cs_agent_capabilities.*cs_agent_create.*cs_agent_send.*cs_agent_wait_message.*cs_agent_destroy/is,
+  );
   assert.deepEqual(
     tools.tools.map((tool) => tool.name),
     [
@@ -1072,6 +1080,41 @@ test("MCP server exposes all facade tools and returns structured create results"
       "cs_agent_destroy",
     ],
   );
+  const toolsByName = new Map(tools.tools.map((tool) => [tool.name, tool]));
+  const descriptionSignals: Record<string, RegExp> = {
+    cs_agent_capabilities: /call first when considering delegation or heterogeneous execution/i,
+    cs_agent_create: /parallel work.*different agent runtime.*independent review/i,
+    cs_agent_list: /before creating duplicates.*coordinating parallel work/i,
+    cs_agent_status: /diagnose.*before deciding to wait.*cancel.*retry/i,
+    cs_agent_events: /progress monitoring across agents or turns/i,
+    cs_agent_send: /self-contained task.*deliverable.*verification/i,
+    cs_agent_get_message: /already have its id.*wait_message instead/i,
+    cs_agent_wait_message: /preferred blocking wait after cs_agent_send/i,
+    cs_agent_get_turn: /detailed state.*error.*permission diagnostics/i,
+    cs_agent_wait_turn: /state transitions matter more than reply content/i,
+    cs_agent_respond_permission: /apply least privilege/i,
+    cs_agent_cancel: /obsolete.*destructive control action/i,
+    cs_agent_destroy: /work is complete or abandoned.*destructive/i,
+  };
+  for (const [toolName, signal] of Object.entries(descriptionSignals)) {
+    assert.match(toolsByName.get(toolName)?.description ?? "", signal, toolName);
+  }
+  assert.equal(toolsByName.get("cs_agent_send")?.annotations?.idempotentHint, true);
+  assert.equal(toolsByName.get("cs_agent_send")?.annotations?.destructiveHint, true);
+  assert.equal(toolsByName.get("cs_agent_send")?.annotations?.openWorldHint, true);
+  assert.equal(toolsByName.get("cs_agent_respond_permission")?.annotations?.openWorldHint, true);
+  assert.equal(toolsByName.get("cs_agent_destroy")?.annotations?.destructiveHint, true);
+  for (const tool of tools.tools) {
+    const properties = (
+      tool.inputSchema as { properties?: Record<string, { description?: string }> }
+    ).properties;
+    for (const [propertyName, property] of Object.entries(properties ?? {})) {
+      assert.ok(
+        property.description && property.description.trim().length > 0,
+        `${tool.name}.${propertyName} must have an input description`,
+      );
+    }
+  }
   assert.deepEqual(structured.agent, { ...structured.agent, agent: "claude", state: "idle" });
 });
 

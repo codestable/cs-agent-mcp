@@ -4,6 +4,11 @@
 
 ## 未发布
 
+### MCP 编排提示
+
+- 增加 MCP server instructions、13 个工具的使用时机与流程描述、完整输入字段说明，以及只读、
+  幂等和破坏性 annotations，帮助调用 Agent 主动判断何时采用多 Agent、异构 Agent 或独立审查。
+
 ## 0.2.0 - 2026-07-18
 
 ### 诊断 CLI
