@@ -170,6 +170,7 @@ type AgentDiagnosticsRuntime = {
 type ReadableInstance = {
   instance: ObservedFacadeInstance;
   snapshot: FacadeSnapshot;
+  snapshotSignature: string;
   generation?: string;
 };
 
@@ -199,6 +200,25 @@ type PreparedAttach = {
 
 const SNAPSHOT_FILE_PATTERN = /^[0-9a-f]{24}\.json$/;
 const FULL_AGENT_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const MIN_REREAD_INTERVAL_MS = 250;
+const FACADE_EVENT_TYPES = [
+  "audit.mutation",
+  "agent.created",
+  "agent.state_changed",
+  "message.accepted",
+  "message.completed",
+  "turn.queued",
+  "turn.started",
+  "turn.text_delta",
+  "turn.status",
+  "turn.tool_call",
+  "permission.requested",
+  "permission.resolved",
+  "turn.completed",
+  "turn.failed",
+  "turn.cancelled",
+  "agent.destroyed",
+] as const satisfies readonly FacadeEvent["type"][];
 
 export function createAgentDiagnostics(options: AgentDiagnosticsOptions = {}): AgentDiagnostics {
   const {
@@ -245,7 +265,9 @@ export function createAgentDiagnostics(options: AgentDiagnosticsOptions = {}): A
     const instanceId = entry.slice(0, -".json".length);
     const snapshotPath = path.join(facadesDir, entry);
     let snapshot: FacadeSnapshot;
+    let snapshotSignature: string;
     try {
+      snapshotSignature = await fileSignature(snapshotPath);
       snapshot = parseDiagnosticSnapshot(await readJson(snapshotPath, readFile));
     } catch (error) {
       return {
@@ -258,6 +280,7 @@ export function createAgentDiagnostics(options: AgentDiagnosticsOptions = {}): A
       };
     }
     const lockProbe = await probeLock(`${snapshotPath}.lock`);
+    const cwd = rootCwd(snapshot);
     return {
       ok: true,
       instance: {
@@ -265,10 +288,11 @@ export function createAgentDiagnostics(options: AgentDiagnosticsOptions = {}): A
           instanceId,
           state: lockProbe.state,
           ...(lockProbe.state === "running" ? { pid: lockProbe.pid } : {}),
-          ...(rootCwd(snapshot) ? { rootCwd: rootCwd(snapshot) } : {}),
+          ...(cwd ? { rootCwd: cwd } : {}),
           snapshotPath,
         },
         snapshot,
+        snapshotSignature,
         ...(lockProbe.state === "running" ? { generation: lockProbe.token } : {}),
       },
     };
@@ -309,6 +333,28 @@ export function createAgentDiagnostics(options: AgentDiagnosticsOptions = {}): A
         readable,
         agent,
         detail: toAgentDetail(readable.instance, readable.snapshot, agent),
+      },
+    };
+  }
+
+  async function rereadAttachedTarget(state: AttachState): Promise<AgentTargetResult> {
+    const result = await readFacadeEntry(`${state.initialInstanceId}.json`);
+    if (!result.ok) {
+      return { found: false, message: result.warning.message };
+    }
+    const agent = result.instance.snapshot.agents[state.target.agent.agentId];
+    if (!agent) {
+      return {
+        found: false,
+        message: `No agent matches selector ${state.target.agent.agentId}`,
+      };
+    }
+    return {
+      found: true,
+      target: {
+        readable: result.instance,
+        agent,
+        detail: toAgentDetail(result.instance.instance, result.instance.snapshot, agent),
       },
     };
   }
@@ -385,7 +431,10 @@ export function createAgentDiagnostics(options: AgentDiagnosticsOptions = {}): A
       exitCode: number;
     };
   }> {
-    const next = await readTarget(state.target.agent.agentId);
+    if (!(await targetChanged(state.target.readable))) {
+      return { state, events: [], replaced: false };
+    }
+    const next = await rereadAttachedTarget(state);
     if (!next.found) {
       return {
         state,
@@ -394,7 +443,7 @@ export function createAgentDiagnostics(options: AgentDiagnosticsOptions = {}): A
         terminal: { reason: "instance_unknown", exitCode: 1 },
       };
     }
-    const drained = await finalDrainIfReplacing({ ...state, target: next.target });
+    const drained = await finalDrainIfInstanceTerminating({ ...state, target: next.target });
     const events = eventsAfter(
       drained.target.readable.snapshot,
       drained.target.agent.agentId,
@@ -413,29 +462,33 @@ export function createAgentDiagnostics(options: AgentDiagnosticsOptions = {}): A
     };
   }
 
-  async function finalDrainIfReplacing(state: AttachState): Promise<AttachState> {
-    if (!isReplacement(state)) {
-      return state;
-    }
-    let events = eventsAfter(
-      state.target.readable.snapshot,
-      state.target.agent.agentId,
-      state.cursor,
+  async function targetChanged(readable: ReadableInstance): Promise<boolean> {
+    const [snapshotSignature, lockProbe] = await Promise.all([
+      fileSignature(readable.instance.snapshotPath),
+      probeLock(`${readable.instance.snapshotPath}.lock`),
+    ]);
+    return (
+      snapshotSignature !== readable.snapshotSignature ||
+      lockProbe.state !== readable.instance.state ||
+      (lockProbe.state === "running" && lockProbe.token !== readable.generation)
     );
-    if (events.length > 0) {
+  }
+
+  async function finalDrainIfInstanceTerminating(state: AttachState): Promise<AttachState> {
+    const terminal = terminalFor(state.target);
+    if (
+      !isReplacement(state) &&
+      terminal?.reason !== "instance_stopped" &&
+      terminal?.reason !== "instance_unknown"
+    ) {
       return state;
     }
     await sleep(finalDrainMs, scheduler);
-    const finalDrain = await readTarget(state.target.agent.agentId);
+    const finalDrain = await rereadAttachedTarget(state);
     if (!finalDrain.found) {
       return state;
     }
-    events = eventsAfter(
-      finalDrain.target.readable.snapshot,
-      finalDrain.target.agent.agentId,
-      state.cursor,
-    );
-    return events.length > 0 ? { ...state, target: finalDrain.target } : state;
+    return { ...state, target: finalDrain.target };
   }
 
   function isReplacement(state: AttachState): boolean {
@@ -512,8 +565,8 @@ function resolveAgentDiagnosticsRuntime(options: AgentDiagnosticsOptions): Agent
     readFile: withDefault(options.readFile, defaultReadFile),
     watchFacadeChanges: withDefault(options.watchFacadeChanges, defaultWatchFacadeChanges),
     scheduler: withDefault(options.scheduler, defaultScheduler),
-    debounceMs: withDefault(options.debounceMs, 25),
-    fallbackMs: withDefault(options.fallbackMs, 1_000),
+    debounceMs: Math.max(MIN_REREAD_INTERVAL_MS, withDefault(options.debounceMs, 250)),
+    fallbackMs: Math.max(MIN_REREAD_INTERVAL_MS, withDefault(options.fallbackMs, 1_000)),
     finalDrainMs: withDefault(options.finalDrainMs, 25),
   };
 }
@@ -531,6 +584,18 @@ async function readJson(
   readFile: (filePath: string) => Promise<string>,
 ): Promise<unknown> {
   return JSON.parse(await readFile(filePath));
+}
+
+async function fileSignature(filePath: string): Promise<string> {
+  try {
+    const stat = await fs.stat(filePath);
+    return `${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
+  } catch (error) {
+    if (hasErrorCode(error, "ENOENT")) {
+      return "missing";
+    }
+    throw error;
+  }
 }
 
 function hasErrorCode(error: unknown, code: string): boolean {
@@ -630,6 +695,7 @@ function toTimelineEvent(event: FacadeEvent): DiagnosticTimelineItem {
 function projectEvent(event: FacadeEvent): DiagnosticEvent {
   const detail = projectEventDetail(event);
   const summary = typeof detail.summary === "string" ? detail.summary : event.type;
+  const projectedSummary = truncateText(summary);
   const { summary: _summary, ...safeDetail } = detail;
   return {
     cursor: event.cursor,
@@ -637,8 +703,8 @@ function projectEvent(event: FacadeEvent): DiagnosticEvent {
     timestamp: event.timestamp,
     agentId: event.agentId,
     ...(event.turnId ? { turnId: event.turnId } : {}),
-    summary: truncateText(summary).text,
-    truncated: truncateText(summary).truncated,
+    summary: projectedSummary.text,
+    truncated: projectedSummary.truncated || detail.truncated === true,
     detail: safeDetail,
   };
 }
@@ -817,7 +883,7 @@ async function waitForFacadeChange(
       resolve();
     };
     try {
-      watcher = watchFacadeChanges(facadesDir, scheduleDone, done);
+      watcher = watchFacadeChanges(facadesDir, scheduleDone, scheduleDone);
     } catch {
       // The 1s fallback remains active when fs.watch is unavailable.
     }
@@ -861,7 +927,7 @@ function parseDiagnosticSnapshot(value: unknown): FacadeSnapshot {
   const turns = requireRecord(record.turns, "snapshot.turns");
   const messages = requireRecord(record.messages, "snapshot.messages");
   const permissions = requireRecord(record.permissions, "snapshot.permissions");
-  requireArray(record.events, "snapshot.events");
+  const events = requireArray(record.events, "snapshot.events");
   requireRecord(record.idempotency, "snapshot.idempotency");
   requireRecord(record.identities, "snapshot.identities");
 
@@ -874,6 +940,9 @@ function parseDiagnosticSnapshot(value: unknown): FacadeSnapshot {
   for (const [permissionId, permission] of Object.entries(permissions)) {
     parsePermission(permissionId, permission);
   }
+  for (const [index, event] of events.entries()) {
+    parseEvent(index, event);
+  }
   return {
     schema: "cs-agent-mcp.facade.v1",
     revision,
@@ -882,10 +951,32 @@ function parseDiagnosticSnapshot(value: unknown): FacadeSnapshot {
     turns: turns as FacadeSnapshot["turns"],
     messages: messages as FacadeSnapshot["messages"],
     permissions: permissions as FacadeSnapshot["permissions"],
-    events: record.events as FacadeSnapshot["events"],
+    events: events as FacadeSnapshot["events"],
     idempotency: record.idempotency as FacadeSnapshot["idempotency"],
     identities: record.identities as FacadeSnapshot["identities"],
   };
+}
+
+function parseEvent(index: number, value: unknown): void {
+  const name = `snapshot.events.${index}`;
+  const record = requireRecord(value, name);
+  const cursor = requireString(record.cursor, `${name}.cursor`);
+  if (!/^\d+$/.test(cursor)) {
+    throw new Error(`Invalid ${name}.cursor`);
+  }
+  requireString(record.rootExecutionId, `${name}.rootExecutionId`);
+  requireOneOf(record.type, FACADE_EVENT_TYPES, `${name}.type`);
+  requireString(record.agentId, `${name}.agentId`);
+  requireString(record.timestamp, `${name}.timestamp`);
+  if (record.actorAgentId !== undefined) {
+    requireString(record.actorAgentId, `${name}.actorAgentId`);
+  }
+  if (record.turnId !== undefined) {
+    requireString(record.turnId, `${name}.turnId`);
+  }
+  if (!Object.hasOwn(record, "data")) {
+    throw new Error(`Invalid ${name}.data`);
+  }
 }
 
 function parseAgent(agentId: string, value: unknown): void {

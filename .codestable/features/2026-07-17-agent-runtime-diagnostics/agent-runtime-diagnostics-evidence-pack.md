@@ -142,6 +142,20 @@ fake clock/scheduler 测试，不改变公开 CLI、MCP 工具或持久化 schem
 - S4：done，`agents attach` 跟随、terminal 和 permission read-only 测试完成。
 - S5：done，hardening、文档、package smoke 和完整检查完成。
 
+## Review-fix Round 1
+
+- Review input：`agent-runtime-diagnostics-review.md` round 1，结论为 `changes-requested`。
+- 修复范围：REV-001 至 REV-005；未改变公开 CLI、13 个 MCP 工具、Facade schema 或只读边界。
+- RED：新增 nested Event 损坏、同 generation stopped 最终 drain、250ms/stat gate + watcher error、
+  顶层截断信号用例后，定向测试 4/8 失败，分别命中四类审查缺口。
+- GREEN：Event required fields/type 逐项校验；目标 snapshot signature + lock state gate；最小 250ms
+  wake 间隔；stop/replacement 最终二次 drain；watch error 走同一 debounce；顶层截断信号继承正文截断。
+- VERIFY：`pnpm run build:test && node --test dist-test/test/agent-diagnostics.test.js` 8/8；
+  `pnpm run typecheck`、`pnpm run lint`、CLI integration 通过；`pnpm run test` 退出 0；使用独立 npm cache
+  的完整 check 链路通过，`pnpm run pack:check` 退出 0 并生成 dry-run tarball 清单。
+- 清洁度：`pnpm run format:check`、`git diff --check` 通过；移除 terminal exit code 死赋值及其孤儿 helper，
+  无新增 debug output、TODO/FIXME/XXX、注释旧代码或无用 import。
+
 ## 验收场景自检
 
 - 无参数 stdio 和 13 MCP 工具生命周期：`mcp-cli.test`、`mcp-e2e.test`、package smoke 覆盖。

@@ -117,9 +117,6 @@ function createAgentsCommand(): Command {
             break;
           }
           writeTimelineItem(next.value, Boolean(options.json));
-          if (next.value.kind === "terminal") {
-            exitCode = terminalExitCode(next.value.reason);
-          }
         }
       } catch (error) {
         process.stderr.write(
@@ -184,16 +181,6 @@ function writeTimelineItem(item: DiagnosticTimelineItem, json: boolean): void {
     return;
   }
   process.stdout.write(`terminal ${item.reason}\n`);
-}
-
-function terminalExitCode(
-  reason: Extract<DiagnosticTimelineItem, { kind: "terminal" }>["reason"],
-): number {
-  return reason === "instance_stopped" ||
-    reason === "instance_unknown" ||
-    reason === "instance_replaced"
-    ? 1
-    : 0;
 }
 
 async function main(argv: string[]): Promise<void> {
