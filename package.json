@@ -1,6 +1,6 @@
 {
   "name": "cs-agent-mcp",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "通过 MCP 统一创建、调用和编排本机 Codex、Claude 等编码 Agent",
   "keywords": [
     "acp",
@@ -53,7 +53,8 @@
     "package:smoke": "node scripts/package-smoke.mjs",
     "prepack": "tsdown --logLevel silent src/mcp-cli.ts --format esm --clean --platform node --target node22 --no-fixedExtension",
     "prepublishOnly": "pnpm run check",
-    "test": "pnpm run build:test && node --test dist-test/test/agent-diagnostics.test.js dist-test/test/client.test.js dist-test/test/file-session-store.test.js dist-test/test/mcp-cli.test.js dist-test/test/mcp-e2e.test.js dist-test/test/mcp-facade-lock.test.js dist-test/test/mcp-facade-store.test.js dist-test/test/mcp-facade.test.js dist-test/test/mcp-runtime-adapter.test.js dist-test/test/runtime-manager.test.js dist-test/test/spawn-options.test.js",
+    "test": "pnpm run build:test && node --test dist-test/test/agent-diagnostics.test.js dist-test/test/agent-tui.test.js dist-test/test/client.test.js dist-test/test/file-session-store.test.js dist-test/test/mcp-cli.test.js dist-test/test/mcp-e2e.test.js dist-test/test/mcp-facade-lock.test.js dist-test/test/mcp-facade-store.test.js dist-test/test/mcp-facade.test.js dist-test/test/mcp-runtime-adapter.test.js dist-test/test/runtime-manager.test.js dist-test/test/spawn-options.test.js",
+    "test:tui-e2e": "node scripts/agent-top-e2e.mjs",
     "typecheck": "tsc6 --noEmit",
     "typecheck:tsc": "tsc6 --noEmit"
   },
@@ -61,10 +62,12 @@
     "@agentclientprotocol/sdk": "^1.2.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "commander": "^15.0.0",
+    "terminal-kit": "^3.1.3",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^26.1.1",
+    "@types/terminal-kit": "^2.5.7",
     "@typescript/native": "npm:typescript@^7.0.2",
     "markdownlint-cli2": "^0.23.0",
     "oxfmt": "^0.58.0",

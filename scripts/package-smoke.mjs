@@ -135,6 +135,15 @@ try {
   assert.match(agentsHelp.stdout, /list/);
   assert.match(agentsHelp.stdout, /status/);
   assert.match(agentsHelp.stdout, /attach/);
+  assert.match(agentsHelp.stdout, /top\|ps/);
+
+  const agentsTopHelp = await runBinary(["agents", "top", "--help"]);
+  assert.equal(agentsTopHelp.code, 0, agentsTopHelp.stderr);
+  assert.match(agentsTopHelp.stdout, /--all/);
+
+  const agentsPsHelp = await runBinary(["agents", "ps", "--help"]);
+  assert.equal(agentsPsHelp.code, 0, agentsPsHelp.stderr);
+  assert.match(agentsPsHelp.stdout, /top\|ps/);
 
   const agentsList = await runBinary(["agents", "list", "--all", "--json"]);
   assert.equal(agentsList.code, 0, agentsList.stderr);

@@ -247,6 +247,8 @@ cs-agent-mcp agents list
 cs-agent-mcp agents list --all --json
 cs-agent-mcp agents status <agent-id-or-prefix>
 cs-agent-mcp agents attach <agent-id-or-prefix> --history 20
+cs-agent-mcp agents top
+cs-agent-mcp agents ps --all
 ```
 
 `list` 默认只显示 running 实例里的非 destroyed Agent；`--all` 会包含 stopped/unknown 实例和
@@ -256,6 +258,15 @@ destroyed Agent。`status` 和 `attach` 的 selector 在全集解析：完整 Ag
 文本输出会分别标记 Agent 的 `KIND` 和 `RUNTIME`。`root` 是当前 MCP 客户端在 Facade 中的
 调用者身份，不承载受管 runtime，也不会产生可跟随的任务输出；通过 `cs_agent_create` 创建的
 `managed` Agent 才会记录 Turn、工具活动和输出事件。
+
+`top`（别名 `ps`）在交互式终端中打开实时全屏视图，每秒刷新 Agent 状态。方向键、`j/k`、
+PageUp/PageDown、Home/End、鼠标单击和滚轮用于选择；Enter 对选中的 managed Agent 进入同屏
+Attach，Esc 返回列表，`/` 过滤，`a` 切换是否包含全部状态，`r` 刷新，`q` 或 `Ctrl-C` 退出。
+`--all` 只决定初始显示范围。root 行可查看但不可 Attach；终端小于 72x12 时会显示尺寸提示。
+
+Attach 子视图最多保留 2,000 条 timeline item。向上滚动会暂停自动跟随并累计未读数，End 恢复
+实时跟随。`top|ps` 要求 stdin/stdout 都是 TTY；重定向或脚本场景应使用 `list --json` 或
+`attach --json`，不会输出 ANSI 控制序列。
 
 `attach` 先输出目标 Agent 的当前 snapshot 和有限历史，再按 cursor 只读跟随新事件。它不会发送
 消息、响应权限、取消 Turn 或修改任何状态；Agent destroyed 时返回 0，实例 stopped/unknown 或
@@ -275,7 +286,7 @@ raw tool payload、`rawInput`、`rawOutput` 和其他未知字段不会输出。
 | Codex 或 Claude 探测失败       | 先运行 `codex --version` 或 `claude --version`，确认对应 CLI 已安装并登录，再调用 `cs_agent_capabilities` 探测 |
 | 第一次调用较慢                 | 等待 npm 下载对应 ACP 适配器及 SDK；网络失败后可以重试，不需要单独安装适配器                                   |
 | 手工启动后没有终端提示         | 这是正常行为；`cs-agent-mcp` 使用 stdin/stdout 传输 MCP 协议，不提供交互式界面                                 |
-| 不知道哪个 Agent 卡住          | 运行 `cs-agent-mcp agents list --all`，再用 `cs-agent-mcp agents status <agent-id>` 查看详情                   |
+| 不知道哪个 Agent 卡住          | 在终端运行 `cs-agent-mcp agents top` 实时浏览，或用 `agents list --all` 后接 `agents status <agent-id>`        |
 | 想跟随某个 Agent 的事件        | 运行 `cs-agent-mcp agents attach <agent-id>`；这是只读观察，不会响应权限或取消任务                             |
 | workspace 被占用               | 关闭同一 workspace 的重复 MCP 客户端或遗留进程；同一时间只能有一个服务进程持有该 workspace                     |
 | `cwd` 或 workspace root 被拒绝 | 确认目录真实存在，并且位于 MCP 客户端声明的 workspace roots 内                                                 |

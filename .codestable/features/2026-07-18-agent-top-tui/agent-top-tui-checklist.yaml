@@ -1,0 +1,87 @@
+feature: 2026-07-18-agent-top-tui
+created: 2026-07-18
+
+steps:
+  - id: S1
+    action: "终端壳与依赖可行性：接通延迟加载、TTY guard、全屏输入和幂等 cleanup，并验证构建与临时安装"
+    exit_signal: "最小 TUI 可在真实 TTY 进入并通过 q/Ctrl-C 恢复终端，typecheck、build 和 tarball 加载全部通过"
+    status: done
+  - id: S2
+    action: "列表状态机：接入 epoch 刷新、stale merge、稳定排序与选择、过滤子状态、includeAll、键盘和鼠标导航"
+    exit_signal: "确定性测试覆盖 deferred 刷新、单实例损坏、Agent 消失、过滤编辑、全部键位、单击和滚轮"
+    status: done
+  - id: S3
+    action: "Attach 子视图：接入 epoch/pump 所有权、可取消事件流、有界历史、live/paused、terminal banner 和 Esc 返回"
+    exit_signal: "测试证明事件有序、generation 隔离、root 禁用、2,000 条上限、正文保真，Esc/shutdown 等待或隔离 pending pump"
+    status: done
+  - id: S4
+    action: "终端韧性与可见状态：完成控制序列净化、resize、小尺寸、空态、warning、长文本、异常和信号清理"
+    exit_signal: "poison fixture 与异常测试证明 CSI/OSC/DCS/C0/C1 不执行、宽字符不破列，所有退出路径恢复终端"
+    status: done
+  - id: S5
+    action: "包与文档闭环：注册并执行全部测试、临时全局安装、13 tools 回归、可执行 PTY 键鼠 E2E 和文档归并"
+    exit_signal: "测试文件进入实际 test command，pnpm run check、package smoke、pnpm run test:tui-e2e 和 top/ps tarball 操作通过"
+    status: done
+
+checks:
+  - item: "Agent Top 只通过单一运行入口消费 AgentDiagnostics，terminal-kit 被隔离在 adapter 内"
+    source: 名词契约
+    status: passed
+  - item: "top 为主命令且 ps 为等价别名，list 和无参数 stdio 行为保持不变"
+    source: 挂载点
+    status: passed
+  - item: "列表每秒串行刷新，selection 按 Agent ID 保持，过滤和 includeAll 可恢复"
+    source: 编排骨架
+    status: passed
+  - item: "键盘和鼠标均可选择、滚动，Enter 仅 attach managed Agent，Esc 返回列表"
+    source: 验收场景
+    status: passed
+  - item: "Attach 支持有界历史、live/paused、未读计数和 terminal reason，且不跨 generation"
+    source: 流程级约束
+    status: passed
+  - item: "root Enter 只显示控制身份说明，不启动 attach generator"
+    source: 验收场景
+    status: passed
+  - item: "非 TTY、窄终端、空态、warning、resize 和 fatal error 均有明确且不重叠的可见状态"
+    source: 验收场景
+    status: passed
+  - item: "所有退出路径幂等恢复 raw、mouse、cursor、alternate screen、listener 和 timer"
+    source: 流程级约束
+    status: passed
+  - item: "renderer 剥离 CSI/OSC/DCS/C0/C1/换行等终端注入，宽字符按显示单元截断"
+    source: 流程级约束
+    status: passed
+  - item: "单 snapshot warning 保留对应 instance 的 stale rows，旧 epoch 的异步结果不覆盖新模式"
+    source: 编排骨架
+    status: passed
+  - item: "TUI 不调用 mutation/写文件，不读取宿主对话，不新增远程服务或 snapshot schema"
+    source: 范围守护
+    status: passed
+  - item: "最终 tarball 可加载 top/ps，默认 stdio MCP 仍暴露 13 tools 并通过 lifecycle smoke"
+    source: 验收场景
+    status: passed
+  - item: "README、MCP 架构、CHANGELOG 和 agent-runtime-diagnostics requirement 在收尾时同步"
+    source: 挂载点
+    status: passed
+
+dod:
+  commands:
+    - id: CMD-001
+      command: "NPM_CONFIG_CACHE=/tmp/cs-agent-mcp-npm-cache pnpm run check"
+      core: true
+      failure_handling: fix-or-block
+    - id: CMD-002
+      command: "git diff --check"
+      core: false
+      failure_handling: fix-or-block
+    - id: CMD-003
+      command: "pnpm run test:tui-e2e"
+      core: true
+      failure_handling: fix-or-block
+  evidence_required:
+    - command_output
+    - diff_summary
+    - package_smoke
+    - real_tty_keyboard_mouse
+  cleanliness:
+    debug_output: forbidden

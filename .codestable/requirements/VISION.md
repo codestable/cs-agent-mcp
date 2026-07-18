@@ -2,12 +2,12 @@
 
 ## Draft
 
-- [Agent 运行状态透视与排障](agent-runtime-diagnostics.md) (`draft`)：在终端一眼看清正在运行的
-  Agent，并快速定位卡住或失败的原因。
+暂无。
 
 ## Current
 
-暂无。
+- [Agent 运行状态透视与排障](agent-runtime-diagnostics.md) (`current`)：在终端实时浏览正在运行的
+  Agent，并通过一次性状态、线性事件流或键鼠 TUI 快速定位卡住和失败的原因。
 
 ## Outdated
 

@@ -31,6 +31,10 @@ type AgentsAttachOptions = {
   json?: boolean;
 };
 
+type AgentsTopOptions = {
+  all?: boolean;
+};
+
 function configureLocalClaude(): void {
   process.env.ACPX_CLAUDE_INCLUDE_USER_SETTINGS ??= "1";
   const executable = resolveClaudeCodeExecutable();
@@ -92,6 +96,38 @@ function createAgentsCommand(): Command {
         return;
       }
       writeAgentStatusText(result.agent);
+    });
+
+  agents
+    .command("top")
+    .alias("ps")
+    .description("实时浏览本机 Agent 并进入只读 Attach 视图")
+    .option("--all", "包含 stopped/unknown 实例和 destroyed Agent")
+    .action(async (options: AgentsTopOptions) => {
+      const abort = new AbortController();
+      let signalExitCode = 0;
+      const onInterrupt = () => {
+        signalExitCode = 0;
+        abort.abort();
+      };
+      const onTerminate = () => {
+        signalExitCode = 143;
+        abort.abort();
+      };
+      process.once("SIGINT", onInterrupt);
+      process.once("SIGTERM", onTerminate);
+      try {
+        const { runAgentsTop } = await import("./mcp/diagnostics/tui/index.js");
+        process.exitCode = await runAgentsTop({
+          diagnostics: createAgentDiagnostics(),
+          includeAll: options.all,
+          signal: abort.signal,
+          signalExitCode: () => signalExitCode,
+        });
+      } finally {
+        process.removeListener("SIGINT", onInterrupt);
+        process.removeListener("SIGTERM", onTerminate);
+      }
     });
 
   agents

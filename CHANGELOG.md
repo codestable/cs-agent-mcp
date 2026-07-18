@@ -4,6 +4,17 @@
 
 ## 未发布
 
+## 0.2.2 - 2026-07-18
+
+### 实时诊断 TUI
+
+- 新增交互式 `cs-agent-mcp agents top` 和等价别名 `agents ps`，支持实时列表、稳定选择、过滤、
+  `--all` 范围切换、键盘和 SGR 鼠标导航，以及在同一终端内进入 managed Agent 的 Attach 视图。
+- Attach 子视图支持有界历史、live/paused、未读计数和终态提示；root 身份保持可见但不会启动
+  runtime Attach。
+- 所有 DTO 文本在终端边界剥离控制序列；q、Ctrl-C、SIGTERM、resize 和异常路径都会恢复 raw、
+  mouse、cursor 与 alternate screen。非 TTY 会明确失败并保持 stdout 无 ANSI。
+
 ### 诊断 CLI 修复
 
 - 诊断 CLI 文本输出现在明确区分 `root` 调用者身份与 `managed` runtime；attach 到 root 时会

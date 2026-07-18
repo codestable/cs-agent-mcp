@@ -161,6 +161,30 @@ test("cs-agent-mcp exposes agents diagnostics subcommands without starting stdio
   assert.match(result.stdout, /list/);
   assert.match(result.stdout, /status/);
   assert.match(result.stdout, /attach/);
+  assert.match(result.stdout, /top\|ps/);
+
+  const topHelp = await runCli(["agents", "top", "--help"], { HOME: home });
+  assert.equal(topHelp.code, 0);
+  assert.equal(topHelp.stderr, "");
+  assert.match(topHelp.stdout, /Usage: cs-agent-mcp agents top\|ps/);
+  assert.match(topHelp.stdout, /--all/);
+
+  const psHelp = await runCli(["agents", "ps", "--help"], { HOME: home });
+  assert.equal(psHelp.code, 0);
+  assert.equal(psHelp.stderr, "");
+  assert.match(psHelp.stdout, /Usage: cs-agent-mcp agents top\|ps/);
+});
+
+test("cs-agent-mcp agents top rejects redirected terminals without ANSI output", async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "cs-agent-mcp-agents-top-nontty-"));
+  t.after(async () => await fs.rm(home, { recursive: true, force: true }));
+
+  const result = await runCli(["agents", "top"], { HOME: home });
+
+  assert.equal(result.code, 1);
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /requires an interactive TTY/);
+  assert.equal(result.stderr.includes("\u001b"), false);
 });
 
 test("cs-agent-mcp agents list renders discovered snapshots as text and JSON", async (t) => {
