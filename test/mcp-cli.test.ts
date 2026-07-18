@@ -215,6 +215,63 @@ test("cs-agent-mcp agents list renders discovered snapshots as text and JSON", a
   );
 });
 
+test("cs-agent-mcp diagnostics text distinguishes root identities from managed runtimes", async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "cs-agent-mcp-agents-kind-"));
+  t.after(async () => await fs.rm(home, { recursive: true, force: true }));
+  const rootId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const managedId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+  await writeDiagnosticSnapshot(home, "abababababababababababab", {
+    ...diagnosticSnapshot({
+      [rootId]: diagnosticAgent({ agentId: rootId, kind: "root" }),
+      [managedId]: diagnosticAgent({ agentId: managedId, kind: "managed" }),
+    }),
+    nextCursor: 3,
+    events: [
+      {
+        cursor: "1",
+        rootExecutionId: "root-1",
+        type: "agent.created",
+        agentId: rootId,
+        timestamp: TEST_TIMESTAMP,
+        data: { kind: "root", agent: "claude" },
+      },
+      {
+        cursor: "2",
+        rootExecutionId: "root-1",
+        type: "turn.text_delta",
+        agentId: managedId,
+        turnId: "turn-1",
+        timestamp: TEST_TIMESTAMP,
+        data: { stream: "output", text: "turn.text_delta" },
+      },
+    ],
+  });
+
+  const list = await runCli(["agents", "list", "--all"], { HOME: home });
+  assert.equal(list.code, 0);
+  assert.match(list.stdout, /AGENT ID {2}KIND {2}RUNTIME/);
+  assert.match(list.stdout, new RegExp(`${rootId}  root  claude`));
+  assert.match(list.stdout, new RegExp(`${managedId}  managed  claude`));
+
+  const status = await runCli(["agents", "status", rootId], { HOME: home });
+  assert.equal(status.code, 0);
+  assert.match(status.stdout, /Kind: root/);
+  assert.match(status.stdout, /Runtime: claude/);
+
+  const attach = await runCli(["agents", "attach", rootId], { HOME: home });
+  assert.equal(attach.code, 1);
+  assert.equal(attach.stderr, "");
+  assert.match(attach.stdout, new RegExp(`snapshot ${rootId} root claude idle`));
+  assert.match(attach.stdout, /root agents are MCP caller identities/i);
+  assert.match(attach.stdout, /no managed runtime output/i);
+  assert.match(attach.stdout, /agent\.created created/);
+  assert.doesNotMatch(attach.stdout, /agent\.created agent\.created/);
+
+  const managedAttach = await runCli(["agents", "attach", managedId], { HOME: home });
+  assert.equal(managedAttach.code, 1);
+  assert.match(managedAttach.stdout, /turn\.text_delta turn\.text_delta/);
+});
+
 test("cs-agent-mcp agents status resolves hidden full ids and fails closed for prefixes with corrupt snapshots", async (t) => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "cs-agent-mcp-agents-status-"));
   t.after(async () => await fs.rm(home, { recursive: true, force: true }));

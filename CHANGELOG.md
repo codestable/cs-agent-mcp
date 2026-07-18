@@ -4,6 +4,11 @@
 
 ## 未发布
 
+### 诊断 CLI 修复
+
+- 诊断 CLI 文本输出现在明确区分 `root` 调用者身份与 `managed` runtime；attach 到 root 时会
+  解释其没有受管 runtime 输出，并避免重复显示 `agent.created agent.created`。
+
 ## 0.2.1 - 2026-07-18
 
 ### MCP 编排提示

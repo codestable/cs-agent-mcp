@@ -253,6 +253,10 @@ cs-agent-mcp agents attach <agent-id-or-prefix> --history 20
 destroyed Agent。`status` 和 `attach` 的 selector 在全集解析：完整 Agent ID 可在其他 snapshot
 损坏时继续匹配；前缀遇到损坏 snapshot 会 fail closed，要求使用完整 ID。
 
+文本输出会分别标记 Agent 的 `KIND` 和 `RUNTIME`。`root` 是当前 MCP 客户端在 Facade 中的
+调用者身份，不承载受管 runtime，也不会产生可跟随的任务输出；通过 `cs_agent_create` 创建的
+`managed` Agent 才会记录 Turn、工具活动和输出事件。
+
 `attach` 先输出目标 Agent 的当前 snapshot 和有限历史，再按 cursor 只读跟随新事件。它不会发送
 消息、响应权限、取消 Turn 或修改任何状态；Agent destroyed 时返回 0，实例 stopped/unknown 或
 generation 更替时在最终 drain 后返回非零，`Ctrl-C` 返回 0。

@@ -143,18 +143,19 @@ function writeAgentsListText(agents: AgentDiagnosticSummary[]): void {
     process.stdout.write("No agents found\n");
     return;
   }
-  process.stdout.write("AGENT ID  TYPE  NAME  STATE  TURN  QUEUE  WORKSPACE\n");
+  process.stdout.write("AGENT ID  KIND  RUNTIME  NAME  STATE  TURN  QUEUE  WORKSPACE\n");
   for (const agent of agents) {
     process.stdout.write(
-      `${agent.agentId}  ${agent.agent}  ${agent.name ?? "-"}  ${agent.state}  ${
-        agent.activeTurnId ?? "-"
-      }  ${agent.queueDepth}  ${agent.cwd}\n`,
+      `${agent.agentId}  ${agent.kind}  ${agent.agent}  ${agent.name ?? "-"}  ${
+        agent.state
+      }  ${agent.activeTurnId ?? "-"}  ${agent.queueDepth}  ${agent.cwd}\n`,
     );
   }
 }
 
 function writeAgentStatusText(agent: AgentDiagnosticSummary): void {
   process.stdout.write(`Agent: ${agent.agentId}\n`);
+  process.stdout.write(`Kind: ${agent.kind}\n`);
   process.stdout.write(`State: ${agent.state}\n`);
   process.stdout.write(`Runtime: ${agent.agent}\n`);
   process.stdout.write(`Workspace: ${agent.cwd}\n`);
@@ -171,12 +172,23 @@ function writeTimelineItem(item: DiagnosticTimelineItem, json: boolean): void {
     return;
   }
   if (item.kind === "snapshot") {
-    process.stdout.write(`snapshot ${item.agent.agentId} ${item.agent.state}\n`);
+    process.stdout.write(
+      `snapshot ${item.agent.agentId} ${item.agent.kind} ${item.agent.agent} ${item.agent.state}\n`,
+    );
+    if (item.agent.kind === "root") {
+      process.stdout.write(
+        "note root agents are MCP caller identities; they have no managed runtime output; attach a managed agent to follow task activity\n",
+      );
+    }
     return;
   }
   if (item.kind === "event") {
+    const summary =
+      item.event.type === "agent.created" && item.event.summary === item.event.type
+        ? "created"
+        : item.event.summary;
     process.stdout.write(
-      `${item.event.cursor} ${item.event.timestamp} ${item.event.type} ${item.event.summary}\n`,
+      `${item.event.cursor} ${item.event.timestamp} ${item.event.type} ${summary}\n`,
     );
     return;
   }
