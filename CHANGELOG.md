@@ -4,6 +4,8 @@
 
 ## 未发布
 
+## 0.2.0 - 2026-07-18
+
 ### 诊断 CLI
 
 - 新增只读诊断命令 `cs-agent-mcp agents list|status|attach`，可从终端查看本机
