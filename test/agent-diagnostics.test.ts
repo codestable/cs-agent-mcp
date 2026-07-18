@@ -367,6 +367,7 @@ test("agent diagnostics attach performs a final drain before reporting a stopped
   changes[0]?.();
   fake.runActive(250);
   await waitUntil(() => snapshotReadCount === 2);
+  await waitUntil(() => fake.activeDelays().includes(25));
   await writeJson(snapshotPath, {
     ...snapshot({ [agentId]: agent({ agentId, state: "running" }) }),
     events: [
