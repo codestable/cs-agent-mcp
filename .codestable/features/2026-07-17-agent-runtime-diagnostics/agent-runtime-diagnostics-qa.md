@@ -23,19 +23,19 @@ round: 1
 
 ## 2. Verification Matrix
 
-| ID | 来源 | 核心性 | 场景 / 风险 | 证据类型 | 命令或动作 | 期望 | 结果 |
-|---|---|---|---|---|---|---|---|
-| QA-001 | design 1 / C03/C09 | core-functional | 无参数 stdio 与 13 工具兼容 | e2e/package | DoD `pnpm run check` + tarball smoke | 13 工具、无诊断污染 | pass |
-| QA-002 | design 2-5 / C01/C04 | core-functional | 精确发现、nested 损坏、selector fail-closed | integration | directed diagnostics + CLI tests | 损坏实例 warning/拒绝，完整 UUID 可用 | pass |
-| QA-003 | design 6-8 / C05/C06 | core-functional | history/cursor、replacement 隔离、stopped final drain | integration | directed diagnostics tests | 不跨 generation，末尾事件先于 stopped terminal | pass |
-| QA-004 | design 9 / C02/C16 | core-functional | JSONL allowlist、thought/raw/details poison、文本截断 | integration | poison + terminal real-shape fixture | 仅 allowlist；poison 不出现；截断信号正确 | pass |
-| QA-005 | design 10 / C08 | core-functional | permission child 可 read/watch/kill，不能 write | process | Node permission test + 四能力 probe | 三种只读能力 true；write ERR_ACCESS_DENIED | pass |
-| QA-006 | design 11 / C14/C17 | supporting | 10k history、250ms、target stat gate、watch error | function | fake scheduler/counting reader test | history 有界；非目标不 parse；无忙循环 | pass |
-| QA-007 | design 12 / C18 | core-functional | 临时 tarball 全局安装 | package/e2e | npm pack + isolated prefix install + smoke | agents 四命令与 13 工具 lifecycle 全绿 | pass |
-| QA-008 | review REV-022 | core-functional | `details.runtimeCode` 单字段可见且 details poison 隐藏 | integration | diagnostics real-shape fixture | status/attach 可见 runtimeCode；cwd/agentId/details 不可见 | pass |
-| QA-009 | DoD CMD-001 | core-functional | 全仓检查 | build/test/package | `pnpm run check`（独立 npm cache） | format/docs/type/lint/build/test/pack 全绿 | pass |
-| QA-010 | DoD CMD-002/003 | supporting | 两层 help 命令 | CLI | DoD runner | 退出 0，命令树完整 | pass |
-| QA-011 | scope/cleanliness | non-functional | 范围与施工痕迹 | gate/diff | scope gate、rg、git diff --check | 无越界、debug/TODO/FIXME/XXX、格式错误 | pass |
+| ID     | 来源                 | 核心性          | 场景 / 风险                                            | 证据类型           | 命令或动作                                 | 期望                                                       | 结果 |
+| ------ | -------------------- | --------------- | ------------------------------------------------------ | ------------------ | ------------------------------------------ | ---------------------------------------------------------- | ---- |
+| QA-001 | design 1 / C03/C09   | core-functional | 无参数 stdio 与 13 工具兼容                            | e2e/package        | DoD `pnpm run check` + tarball smoke       | 13 工具、无诊断污染                                        | pass |
+| QA-002 | design 2-5 / C01/C04 | core-functional | 精确发现、nested 损坏、selector fail-closed            | integration        | directed diagnostics + CLI tests           | 损坏实例 warning/拒绝，完整 UUID 可用                      | pass |
+| QA-003 | design 6-8 / C05/C06 | core-functional | history/cursor、replacement 隔离、stopped final drain  | integration        | directed diagnostics tests                 | 不跨 generation，末尾事件先于 stopped terminal             | pass |
+| QA-004 | design 9 / C02/C16   | core-functional | JSONL allowlist、thought/raw/details poison、文本截断  | integration        | poison + terminal real-shape fixture       | 仅 allowlist；poison 不出现；截断信号正确                  | pass |
+| QA-005 | design 10 / C08      | core-functional | permission child 可 read/watch/kill，不能 write        | process            | Node permission test + 四能力 probe        | 三种只读能力 true；write ERR_ACCESS_DENIED                 | pass |
+| QA-006 | design 11 / C14/C17  | supporting      | 10k history、250ms、target stat gate、watch error      | function           | fake scheduler/counting reader test        | history 有界；非目标不 parse；无忙循环                     | pass |
+| QA-007 | design 12 / C18      | core-functional | 临时 tarball 全局安装                                  | package/e2e        | npm pack + isolated prefix install + smoke | agents 四命令与 13 工具 lifecycle 全绿                     | pass |
+| QA-008 | review REV-022       | core-functional | `details.runtimeCode` 单字段可见且 details poison 隐藏 | integration        | diagnostics real-shape fixture             | status/attach 可见 runtimeCode；cwd/agentId/details 不可见 | pass |
+| QA-009 | DoD CMD-001          | core-functional | 全仓检查                                               | build/test/package | `pnpm run check`（独立 npm cache）         | format/docs/type/lint/build/test/pack 全绿                 | pass |
+| QA-010 | DoD CMD-002/003      | supporting      | 两层 help 命令                                         | CLI                | DoD runner                                 | 退出 0，命令树完整                                         | pass |
+| QA-011 | scope/cleanliness    | non-functional  | 范围与施工痕迹                                         | gate/diff          | scope gate、rg、git diff --check           | 无越界、debug/TODO/FIXME/XXX、格式错误                     | pass |
 
 ## 3. Command Results
 

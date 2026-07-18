@@ -38,75 +38,75 @@ checks:
   - id: C01
     item: "AgentDiagnostics 隐藏精确文件发现、nested schema 校验、lock generation、selector 与 cursor 跟随"
     source: 名词契约
-    status: done
+    status: passed
   - id: C02
     item: "list/status 使用稳定诊断 DTO，attach JSONL 只输出 snapshot/event/terminal allowlist 记录"
     source: 名词契约
-    status: done
+    status: passed
   - id: C03
     item: "无参数 cs-agent-mcp 保持直接启动 stdio MCP，且不增加终端输出"
     source: 编排骨架
-    status: done
+    status: passed
   - id: C04
     item: "list 默认过滤与 selector 全集解析解耦；隐藏候选参与歧义，unreadable snapshot 下 prefix fail-closed"
     source: 流程级约束
-    status: done
+    status: passed
   - id: C05
     item: "attach 先给有限历史并建立 baseline，再用目录 watcher + fallback 按 cursor 跟随，idle 不退出"
     source: 流程级约束
-    status: done
+    status: passed
   - id: C06
-    item: "已 destroyed、Facade 停止/更替和 Ctrl-C 遵守退出码语义，停止前最终 drain 不丢末尾事件"
+    item: "已 destroyed、Facade 停止/更替和 Ctrl-C 遵守退出码语义；停止/unknown 最终 drain，更替不跨 generation"
     source: 流程级约束
-    status: done
+    status: passed
   - id: C07
     item: "npm binary 命令树只新增 agents list/status/attach 一个公共挂载面"
     source: 挂载点
-    status: done
+    status: passed
   - id: C08
     item: "诊断路径不调用 mutation/runtime/identity/lock acquire-remove；live attach 在无 fs-write 权限下可运行"
     source: 范围守护
-    status: done
+    status: passed
   - id: C09
     item: "不改变 facade.v1 schema、13 个 MCP 工具、无参数/--cwd/--version/--help 语义"
     source: 范围守护
-    status: done
+    status: passed
   - id: C10
     item: "不承诺内存 runtime 数据、Agent PID、远程或多用户诊断"
     source: 范围守护
-    status: done
+    status: passed
   - id: C11
     item: "多实例、精确发现、selector、损坏 snapshot、attach drain、poison allowlist 和零写入均有证据"
     source: 验收场景
-    status: done
+    status: passed
   - id: C12
     item: "README、CHANGELOG、MCP 架构文档和 requirement 状态按阶段同步"
     source: 验收场景
-    status: done
+    status: passed
   - id: C13
     item: "实现开始前已隔离 max-turns-exceeded 改动并记录可归因的基线"
     source: 基线约束
-    status: done
+    status: passed
   - id: C14
     item: "10,000 事件 fixture 证明 history 上限、debounce parse 次数和 cursor 顺序满足性能契约"
     source: 性能边界
-    status: done
+    status: passed
   - id: C15
     item: "每个新增测试文件显式加入 package.json scripts.test，runner 输出按名称或计数证明实际执行"
     source: 验证命令
-    status: done
+    status: passed
   - id: C16
     item: "text delta 仅 stream=output 输出正文，thought/缺失/非法/未来 stream 一律 omitted"
     source: 事件投影白名单
-    status: done
+    status: passed
   - id: C17
     item: "SnapshotFollower 用 counting reader 与 fake clock/scheduler 确定性断言 debounce 窗口 parse 上界"
     source: 性能边界
-    status: done
+    status: passed
   - id: C18
     item: "临时安装的 tarball smoke 覆盖 agents --help/list/status/attach 与无参数 MCP 13 工具生命周期"
     source: 验收场景
-    status: done
+    status: passed
 
 dod:
   commands:
