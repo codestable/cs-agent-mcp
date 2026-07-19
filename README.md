@@ -70,13 +70,19 @@ claude mcp add --scope user cs-agent -- npx -y cs-agent-mcp@latest
 
 ## 支持的 Agent
 
-| 支持级别     | Agent                                                                                                                                                                 | 说明                                                                                 |
-| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| 重点支持     | `codex`、`claude`                                                                                                                                                     | 内置 ACP 适配器，并在发布验证中执行真实调用                                          |
-| 内置命令映射 | `pi`、`openclaw`、`gemini`、`cursor`、`copilot`、`droid`、`fast-agent`、`grok-build`、`iflow`、`kilocode`、`kimi`、`kiro`、`mux`、`opencode`、`qoder`、`qwen`、`trae` | 可用性取决于对应本机 CLI、登录状态和 ACP 支持，不承诺与 Codex、Claude 相同的实机覆盖 |
+| 支持级别     | Agent                                                                                                                                                                 | 说明                                                                                       |
+| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| 重点实机支持 | `codex`、`claude`                                                                                                                                                     | 内置 ACP 适配器，并在发布验证中使用本机登录状态执行真实任务                                |
+| ACP 兼容支持 | `pi`、`openclaw`、`gemini`、`cursor`、`copilot`、`droid`、`fast-agent`、`grok-build`、`iflow`、`kilocode`、`kimi`、`kiro`、`mux`、`opencode`、`qoder`、`qwen`、`trae` | 使用与 acpx 0.12.0 一致的内置命令映射和同等级通用 ACP client/runtime；可用性取决于本机环境 |
 
-建议先调用 `cs_agent_capabilities` 并通过 `probeAgents` 探测准备使用的 Agent。也可以在
-`agents` 配置中新增或覆盖任何提供 ACP stdio 接口的 Agent。
+“ACP 兼容支持”不是仅供展示的候选映射。这些 Agent 与 Codex、Claude 共用 Agent 创建和销毁、
+持久或 oneshot 会话、消息与 Turn、权限回传、取消、事件、批量等待和 Workspace 共享控制面。
+例如 `pi` 通过 `pi-acp` 启动，`openclaw` 使用原生 `openclaw acp`，`gemini` 使用原生 ACP 模式。
+不同支持级别的区别是发布门禁的实机覆盖范围，不是 MCP 编排能力不同。
+
+建议先调用 `cs_agent_capabilities` 并通过 `probeAgents` 探测准备使用的 Agent。探测会真实启动对应
+ACP server 并完成 initialize 握手，而不只是检查命令名称。也可以在 `agents` 配置中新增或覆盖
+任何提供 ACP stdio 接口的 Agent。
 
 ## 何时使用多 Agent
 
