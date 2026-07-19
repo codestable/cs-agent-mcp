@@ -4,7 +4,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { resolveClaudeCodeExecutable, resolveCodexExecutable } from "../src/acp/agent-command.js";
+import {
+  buildClaudeAcpSessionCreateTimeoutMessage,
+  resolveClaudeCodeExecutable,
+  resolveCodexExecutable,
+} from "../src/acp/agent-command.js";
 import { resolveAgentSessionCwd } from "../src/acp/client-process.js";
 import { AcpClient, buildAgentSpawnOptions, buildSpawnCommandOptions } from "../src/acp/client.js";
 import { buildTerminalSpawnOptions } from "../src/acp/terminal-manager.js";
@@ -15,6 +19,37 @@ import {
   buildTerminalSpawnCommand,
   resolveWindowsExecutablePath,
 } from "../src/spawn-command-options.js";
+
+test("built-in registry preserves the generic ACP runtime surface", () => {
+  assert.deepEqual(Object.keys(AGENT_REGISTRY), [
+    "pi",
+    "openclaw",
+    "codex",
+    "claude",
+    "gemini",
+    "cursor",
+    "copilot",
+    "droid",
+    "fast-agent",
+    "grok-build",
+    "iflow",
+    "kilocode",
+    "kimi",
+    "kiro",
+    "mux",
+    "opencode",
+    "qoder",
+    "qwen",
+    "trae",
+  ]);
+});
+
+test("Claude session timeout remediation points to the MCP workflow", () => {
+  const message = buildClaudeAcpSessionCreateTimeoutMessage();
+  assert.match(message, /cs_agent_create/);
+  assert.match(message, /oneshot/);
+  assert.doesNotMatch(message, /acpx claude exec/);
+});
 
 function withPlatform<T>(platform: NodeJS.Platform, callback: () => T): T {
   const descriptor = Object.getOwnPropertyDescriptor(process, "platform");

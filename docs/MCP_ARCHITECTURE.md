@@ -32,7 +32,7 @@ MultiAgentFacade ---- FileFacadeStore
   |                       |
   |                       +-- Agent / Turn / Message / Permission / Event
   |
-  +-- RuntimeAdapter ---- ACP Runtime ---- ACP Adapter ---- Codex / Claude
+  +-- RuntimeAdapter ---- ACP Runtime ---- ACP Adapter ---- Codex / Claude / Pi / ...
   |
   +-- Loopback HTTP MCP + scoped bearer token
           ^
@@ -60,7 +60,13 @@ Facade 是 Agent 控制面的唯一状态所有者，负责：
 ### ACP Runtime
 
 Runtime 负责解析内置 Agent 名称、启动 ACP adapter、创建或加载 ACP 会话、标准化事件并处理
-进程生命周期。Facade 不直接理解 Codex/Claude 私有协议。
+进程生命周期。Facade 不直接理解任何 Agent 的私有协议。Codex 和 Claude 是重点实机验证目标；
+Pi、OpenClaw、Gemini 等内置命令映射以及用户配置的 ACP stdio runtime 复用同一通用执行链路。
+
+实现保留源自 ACPX 的协议 client、会话恢复、权限、模型/模式配置和进程管理能力，但不把 ACPX
+的通用命令行客户端作为产品面。`prompt`、`exec`、`sessions`、`config`、`compare`、`flow` 等旧
+CLI 命令不属于兼容契约；Agent 执行和编排统一由 MCP tools 驱动，本地 CLI 只承担只读诊断。
+清理历史代码时不得以“未暴露 ACPX CLI”为由删除通用 runtime 或内置 Agent registry。
 
 ## 领域对象
 

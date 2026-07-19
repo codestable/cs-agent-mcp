@@ -4,6 +4,12 @@
 
 ## 未发布
 
+### 产品边界
+
+- 明确保留通用 ACP runtime 与 Pi、OpenClaw、Gemini 等内置 Agent 映射；公开入口聚焦 stdio MCP、
+  13 个 `cs_agent_*` 工具和 `agents` 只读诊断命令。
+- 运行时错误改为提供可直接通过 MCP 执行的恢复建议，并统一使用 `cs-agent-mcp` 日志前缀。
+
 ## 0.2.3 - 2026-07-18
 
 ### MCP 生命周期修复

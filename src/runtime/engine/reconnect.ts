@@ -143,7 +143,7 @@ async function replayDesiredMode(params: {
     );
     if (params.verbose) {
       process.stderr.write(
-        `[acpx] replayed desired mode ${params.desiredModeId} on fresh ACP session ${params.sessionId} (previous ${params.previousSessionId})\n`,
+        `[cs-agent-mcp] replayed desired mode ${params.desiredModeId} on fresh ACP session ${params.sessionId} (previous ${params.previousSessionId})\n`,
       );
     }
   } catch (error) {
@@ -193,7 +193,7 @@ async function replayDesiredModel(params: {
       : { ...params.models, currentModelId: params.desiredModelId };
     if (params.verbose) {
       process.stderr.write(
-        `[acpx] replayed desired model ${params.desiredModelId} on fresh ACP session ${params.sessionId} (previous ${params.previousSessionId})\n`,
+        `[cs-agent-mcp] replayed desired model ${params.desiredModelId} on fresh ACP session ${params.sessionId} (previous ${params.previousSessionId})\n`,
       );
     }
     return {
@@ -214,7 +214,7 @@ async function replayDesiredModel(params: {
 
 function emitModelSupportWarning(warning: string | undefined, suppressWarnings?: boolean): void {
   if (warning && !suppressWarnings) {
-    process.stderr.write(`[acpx] warning: ${warning}\n`);
+    process.stderr.write(`[cs-agent-mcp] warning: ${warning}\n`);
   }
 }
 
@@ -261,7 +261,7 @@ async function replayDesiredConfigOptions(params: {
       };
       if (params.verbose) {
         process.stderr.write(
-          `[acpx] replayed desired config option ${configId} on fresh ACP session ${params.sessionId} (previous ${params.previousSessionId})\n`,
+          `[cs-agent-mcp] replayed desired config option ${configId} on fresh ACP session ${params.sessionId} (previous ${params.previousSessionId})\n`,
         );
       }
     } catch (error) {
@@ -447,13 +447,13 @@ function logReconnectAttempt(
   }
   if (storedProcessAlive) {
     process.stderr.write(
-      `[acpx] saved session pid ${record.pid} is running; reconnecting to saved ACP session\n`,
+      `[cs-agent-mcp] saved session pid ${record.pid} is running; reconnecting to saved ACP session\n`,
     );
     return;
   }
   if (shouldReconnect) {
     process.stderr.write(
-      `[acpx] saved session pid ${record.pid} is dead; respawning agent and attempting session reconnect\n`,
+      `[cs-agent-mcp] saved session pid ${record.pid} is dead; respawning agent and attempting session reconnect\n`,
     );
   }
 }
@@ -521,7 +521,7 @@ async function replayFreshSessionPreferences(params: {
     });
     params.record.acpx = cloneSessionAcpxState(params.originalAcpx);
     if (params.verbose) {
-      process.stderr.write(`[acpx] ${formatErrorMessage(error)}\n`);
+      process.stderr.write(`[cs-agent-mcp] ${formatErrorMessage(error)}\n`);
     }
     throw error;
   }

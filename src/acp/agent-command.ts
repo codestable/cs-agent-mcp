@@ -270,14 +270,14 @@ export function buildClaudeAcpSessionCreateTimeoutMessage(): string {
   return [
     "Claude ACP session creation timed out before session/new completed.",
     "This matches the known persistent-session stall seen with some Claude Code and @agentclientprotocol/claude-agent-acp combinations.",
-    "In harnessed or non-interactive runs, prefer --approve-all with nonInteractivePermissions=deny, upgrade Claude Code and the Claude ACP adapter, or use acpx claude exec as a one-shot fallback.",
+    'For non-interactive runs, use cs_agent_create with mode "oneshot" when session persistence is not required, or upgrade Claude Code and the Claude ACP adapter.',
   ].join(" ");
 }
 
 async function buildCopilotAcpUnsupportedMessage(command: string): Promise<string> {
   const parts = [
     "GitHub Copilot CLI ACP stdio mode is not available in the installed copilot binary.",
-    "acpx copilot expects a Copilot CLI release that supports --acp --stdio.",
+    'The cs-agent-mcp "copilot" runtime mapping requires a Copilot CLI release that supports --acp --stdio.',
   ];
 
   const helpOutput = await readCommandOutput(command, ["--help"], COPILOT_HELP_TIMEOUT_MS);
@@ -286,7 +286,7 @@ async function buildCopilotAcpUnsupportedMessage(command: string): Promise<strin
   }
 
   parts.push(
-    "Upgrade GitHub Copilot CLI to a release with ACP stdio support, or use --agent with another ACP-compatible adapter in the meantime.",
+    "Upgrade GitHub Copilot CLI to a release with ACP stdio support, or select another registered ACP-compatible runtime in the meantime.",
   );
   return parts.join(" ");
 }

@@ -1459,7 +1459,7 @@ export class AcpClient {
     if (!this.options.verbose) {
       return;
     }
-    process.stderr.write(`[acpx] ${message}\n`);
+    process.stderr.write(`[cs-agent-mcp] ${message}\n`);
   }
 
   private captureStartupStderr(target: string[], chunk: Buffer | string): void {

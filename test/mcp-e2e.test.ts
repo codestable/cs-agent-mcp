@@ -163,10 +163,20 @@ test("all 13 cs_agent tools complete a lifecycle through the cs-agent-mcp stdio 
     arguments: {},
   });
   const capabilityContent = capabilities.structuredContent as {
-    capabilities?: { tools?: string[]; limits?: { maxWaitMs?: number } };
+    capabilities?: {
+      tools?: string[];
+      limits?: { maxWaitMs?: number };
+      agents?: Array<{ agent?: string; availability?: string }>;
+    };
   };
   assert.deepEqual(capabilityContent.capabilities?.tools, EXPECTED_TOOLS);
   assert.equal(capabilityContent.capabilities?.limits?.maxWaitMs, 30_000);
+  const advertisedAgents = new Set(
+    capabilityContent.capabilities?.agents?.map((candidate) => candidate.agent),
+  );
+  for (const agent of ["pi", "openclaw", "gemini"]) {
+    assert.equal(advertisedAgents.has(agent), true, `${agent} must remain MCP-discoverable`);
+  }
 
   const created = await client.callTool({
     name: "cs_agent_create",
