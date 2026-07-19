@@ -81,6 +81,12 @@ class FakeAgentRuntime implements AgentRuntimeAdapter {
   }
 }
 
+class FailingShutdownAgentRuntime extends FakeAgentRuntime {
+  async shutdown(): Promise<void> {
+    throw new Error("adapter shutdown failed");
+  }
+}
+
 class MaxTurnsFailedAgentRuntime extends FakeAgentRuntime {
   override startTurn(input: StartRuntimeTurnInput): RuntimeTurn {
     this.started.push(input);
@@ -287,6 +293,25 @@ function createHarness(
   });
   return { facade, identity, runtime, store };
 }
+
+test("MultiAgentFacade closes its public gate and propagates runtime shutdown failures", async () => {
+  const { facade } = createHarness(new FailingShutdownAgentRuntime());
+  const root = await facade.bootstrapRoot({ agent: "codex", cwd: TEST_WORKSPACE });
+  const actor = { rootExecutionId: root.rootExecutionId, agentId: root.agentId };
+
+  const shutdown = facade.shutdown();
+  await assert.rejects(facade.capabilities({}, actor), { code: "SESSION_RESUME_REQUIRED" });
+  await assert.rejects(shutdown, (error: unknown) => {
+    assert.ok(error instanceof AggregateError);
+    assert.equal(
+      error.errors.some(
+        (cause) => cause instanceof Error && cause.message === "adapter shutdown failed",
+      ),
+      true,
+    );
+    return true;
+  });
+});
 
 test("MultiAgentFacade rejects a workspace symlink that escapes an allowed root", async (t) => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "cs-agent-workspace-root-"));

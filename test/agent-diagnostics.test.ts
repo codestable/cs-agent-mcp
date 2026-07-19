@@ -5,6 +5,8 @@ import path from "node:path";
 import test from "node:test";
 import { createAgentDiagnostics } from "../src/mcp/diagnostics/index.js";
 import type { FacadeEvent, FacadeSnapshot } from "../src/mcp/facade/types.js";
+import { serializeSessionRecordForDisk } from "../src/session/persistence.js";
+import { makeSessionRecord } from "./runtime-test-helpers.js";
 
 const now = "2026-07-17T00:00:00.000Z";
 
@@ -53,6 +55,96 @@ function assertTimelineValue<T>(result: IteratorResult<T, number>): T {
   assert.equal(result.done, false);
   return result.value;
 }
+
+test("agent diagnostics reads the existing managed runtime conversation", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "cs-agent-conversation-"));
+  t.after(async () => await fs.rm(directory, { recursive: true, force: true }));
+  const facadesDir = path.join(directory, "facades");
+  const sessionsDir = path.join(directory, "sessions");
+  await fs.mkdir(facadesDir, { recursive: true });
+  await fs.mkdir(sessionsDir, { recursive: true });
+  const agentId = "11111111-1111-4111-8111-111111111111";
+  const rootExecutionId = "root-1";
+  await writeJson(
+    path.join(facadesDir, "aaaaaaaaaaaaaaaaaaaaaaaa.json"),
+    snapshot({ [agentId]: agent({ agentId, rootExecutionId }) }),
+  );
+  const recordId = `mcp-${rootExecutionId}-${agentId}`;
+  const record = makeSessionRecord({
+    acpxRecordId: recordId,
+    acpSessionId: "native-session-1",
+    agentCommand: "codex-acp",
+    cwd: "/workspace",
+    updated_at: now,
+    messages: [
+      {
+        User: {
+          id: "user-1",
+          content: [
+            { Text: "Inspect the lock." },
+            { Mention: { uri: "file:///workspace/lock.json", content: "lock.json" } },
+            { Image: { source: "base64-omitted", size: { width: 320, height: 200 } } },
+            { Audio: { source: "base64-omitted", mime_type: "audio/wav" } },
+          ],
+        },
+      },
+      "Resume",
+      {
+        Agent: {
+          content: [
+            { Thinking: { text: "I should read it." } },
+            { RedactedThinking: "PRIVATE-REASONING-PAYLOAD" },
+            {
+              ToolUse: {
+                id: "tool-1",
+                name: "Read",
+                raw_input: '{"path":"lock',
+                input: {},
+                is_input_complete: false,
+              },
+            },
+            { Text: "The owner is root-1." },
+          ],
+          tool_results: {
+            "tool-1": {
+              tool_use_id: "tool-1",
+              tool_name: "Read",
+              is_error: false,
+              content: { Text: '{"owner":"root-1"}' },
+            },
+          },
+        },
+      },
+    ],
+  });
+  await writeJson(
+    path.join(sessionsDir, `${encodeURIComponent(recordId)}.json`),
+    serializeSessionRecordForDisk(record),
+  );
+
+  const conversation = await createAgentDiagnostics({ facadesDir, sessionsDir }).readConversation(
+    agentId,
+  );
+
+  assert.deepEqual(conversation?.items, [
+    { kind: "user", text: "Inspect the lock." },
+    { kind: "user", text: "[mention file:///workspace/lock.json] lock.json" },
+    { kind: "user", text: "[image 320x200]" },
+    { kind: "user", text: "[audio audio/wav]" },
+    { kind: "resume" },
+    { kind: "thinking", text: "I should read it." },
+    { kind: "thinking", redacted: true },
+    { kind: "tool_call", toolCallId: "tool-1", name: "Read", input: '{"path":"lock' },
+    {
+      kind: "tool_result",
+      toolCallId: "tool-1",
+      name: "Read",
+      text: '{"owner":"root-1"}',
+      isError: false,
+    },
+    { kind: "assistant", text: "The owner is root-1." },
+  ]);
+});
 
 function createFakeScheduler() {
   type Timer = { callback: () => void; ms: number; active: boolean };

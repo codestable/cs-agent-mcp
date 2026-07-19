@@ -4,6 +4,25 @@
 
 ## 未发布
 
+## 0.2.4 - 2026-07-19
+
+### Workspace 共享控制面
+
+- 多个 Codex、Claude 等独立 stdio 根客户端现在通过机器级按需 Broker 共享同一 Workspace 的唯一
+  Facade/runtime owner 和 Agent 树；规范 roots 顺序不同仍可交叉管理任务，不同 Workspace 继续隔离。
+- stdio 前端使用有状态 Streamable HTTP bridge 和按 session 隔离的 reverse SSE channel；roots 通道
+  405、断开或超时会返回 `BROKER_REVERSE_CHANNEL_UNAVAILABLE`，不再被误判为 roots 非法。
+- 根连接使用 lease 与 grace 收束。单个前端退出或被 SIGKILL 不影响其他根；grace 内重连保持原 lock
+  token，最后连接离开后才关闭 runtime、释放 lock，并让空闲 Broker 自动退出。
+- Broker descriptor、认证、版本握手和 stale recovery 均 fail closed；活跃旧协议 Broker 不会被新版
+  前端终止，Broker crash 后下一连接恢复 snapshot/session 且不静默创建丢失上下文的新 session。
+- 初始化中的 root session 同样参与活跃判断并暂停 grace；关闭按 HTTP listener、session、
+  Facade/runtime、Workspace lock 顺序收束，进程锁可识别 PID 复用并串行化 stale recovery。
+- `agents list|status|attach|top` 保持只读并跨 Workspace 扫描，不连接 Broker；13 tools、Facade snapshot
+  v1、diagnostics v1 和通用 ACP runtime 支持面不变。
+- `agents top` 的 Attach 现在直接只读已有 runtime session record，以对话顺序展示用户消息、Agent
+  文本、thinking、tool call/result；长内容换行且 paused/live 按实际行计数，不为 TUI 复制历史。
+
 ### 产品边界
 
 - 明确保留通用 ACP runtime 与 Pi、OpenClaw、Gemini 等内置 Agent 映射；公开入口聚焦 stdio MCP、

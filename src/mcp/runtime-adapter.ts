@@ -55,6 +55,16 @@ export function createAcpxRuntimeAdapter(options: AcpxRuntimeAdapterOptions): Ag
   const entries = new Map<string, RuntimeEntry>();
   const pendingEntries = new Map<string, PendingRuntimeEntry>();
   const destroyOperations = new Map<string, DestroyOperation>();
+  let closed = false;
+  let shutdownOperation: Promise<void> | undefined;
+
+  const assertOpen = (): void => {
+    if (closed) {
+      throw new FacadeError("SESSION_RESUME_REQUIRED", "The MCP facade runtime is shutting down", {
+        retryable: true,
+      });
+    }
+  };
 
   const validateStableInput = (
     current: EnsureRuntimeAgentInput,
@@ -87,6 +97,7 @@ export function createAcpxRuntimeAdapter(options: AcpxRuntimeAdapterOptions): Ag
     },
 
     async ensureAgent(input: EnsureRuntimeAgentInput, hooks: RuntimeAgentHooks): Promise<void> {
+      assertOpen();
       if (destroyOperations.has(input.agentId)) {
         throw new FacadeError(
           "SESSION_RESUME_REQUIRED",
@@ -100,6 +111,7 @@ export function createAcpxRuntimeAdapter(options: AcpxRuntimeAdapterOptions): Ag
         validateStableInput(pending.input, input);
         pending.hooksRef.current = hooks;
         await pending.initialization;
+        assertOpen();
         return;
       }
 
@@ -129,6 +141,7 @@ export function createAcpxRuntimeAdapter(options: AcpxRuntimeAdapterOptions): Ag
         pendingEntries.set(input.agentId, pendingEntry);
         try {
           await initialization;
+          assertOpen();
         } finally {
           if (pendingEntries.get(input.agentId) === pendingEntry) {
             pendingEntries.delete(input.agentId);
@@ -152,6 +165,7 @@ export function createAcpxRuntimeAdapter(options: AcpxRuntimeAdapterOptions): Ag
     },
 
     startTurn(input: StartRuntimeTurnInput): RuntimeTurn {
+      assertOpen();
       const entry = entries.get(input.agentId);
       if (!entry) {
         throw new FacadeError(
@@ -176,6 +190,7 @@ export function createAcpxRuntimeAdapter(options: AcpxRuntimeAdapterOptions): Ag
     },
 
     async getStatus(agentId: string) {
+      assertOpen();
       const entry = entries.get(agentId);
       if (!entry) {
         throw new FacadeError("SESSION_RESUME_REQUIRED", `Managed agent ${agentId} is not active`, {
@@ -186,6 +201,7 @@ export function createAcpxRuntimeAdapter(options: AcpxRuntimeAdapterOptions): Ag
     },
 
     async destroyAgent(agentId: string, destroyOptions): Promise<void> {
+      assertOpen();
       const existing = destroyOperations.get(agentId);
       if (existing) {
         existing.discardSession ||= destroyOptions?.discardSession ?? false;
@@ -233,6 +249,46 @@ export function createAcpxRuntimeAdapter(options: AcpxRuntimeAdapterOptions): Ag
           destroyOperations.delete(agentId);
         }
       }
+    },
+
+    shutdown(): Promise<void> {
+      closed = true;
+      shutdownOperation ??= (async () => {
+        const failures: unknown[] = [];
+        const destroying = await Promise.allSettled(
+          [...destroyOperations.values()].map(async (operation) => operation.promise),
+        );
+        failures.push(
+          ...destroying
+            .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+            .map((result): unknown => result.reason),
+        );
+
+        await Promise.allSettled(
+          [...pendingEntries.values()].map(async (pending) => pending.initialization),
+        );
+        const closing = await Promise.allSettled(
+          [...entries.entries()].map(async ([agentId, entry]) => {
+            await entry.runtime.close({
+              handle: entry.handle,
+              reason: "MCP facade shutdown",
+              discardPersistentState: false,
+            });
+            if (entries.get(agentId) === entry) {
+              entries.delete(agentId);
+            }
+          }),
+        );
+        failures.push(
+          ...closing
+            .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+            .map((result): unknown => result.reason),
+        );
+        if (failures.length > 0) {
+          throw new AggregateError(failures, "One or more MCP facade runtimes failed to close");
+        }
+      })();
+      return shutdownOperation;
     },
   };
 }

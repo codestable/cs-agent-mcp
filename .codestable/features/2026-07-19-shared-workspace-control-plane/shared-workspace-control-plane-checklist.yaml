@@ -1,0 +1,106 @@
+feature: 2026-07-19-shared-workspace-control-plane
+created: 2026-07-19
+
+steps:
+  - id: S0
+    action: "基线与微重构：记录当前 check/E2E 基线，并只搬迁 Workspace resolver 与 RunningFacade factory 到可复用边界"
+    exit_signal: "公开行为和测试数量不变，单客户端 roots、lock、restart、13-tool lifecycle 与 pnpm run check 全绿"
+    status: done
+  - id: S1
+    action: "Broker 发现与进程生命周期：实现原子启动、ready descriptor、认证、版本握手、stale recovery 和 idle exit"
+    exit_signal: "并发前端最终只产生一个 ready Broker；错误 token、半启动、旧 pid、kill -9 和版本冲突测试均 fail closed 且可恢复"
+    status: done
+  - id: S2
+    action: "有状态 transport bridge：管理 stdio/HTTP JSON-RPC、session id、standalone GET SSE、reverse-ready、roots、close 和 error"
+    exit_signal: "延迟 GET/roots时请求成功；GET 405/SSE断开时有界返回 BROKER_REVERSE_CHANNEL_UNAVAILABLE；instructions和13 tools/schema不变"
+    status: done
+  - id: S3
+    action: "Workspace registry与共享根身份：合并同 key初始化、隔离不同 key、加载 Workspace配置并复用 root actor/Agent树"
+    exit_signal: "两个同 Workspace根客户端可交叉 create/list/status/wait/cancel/destroy；不同 root set互不可见且各自只有一个 Facade owner"
+    status: done
+  - id: S4
+    action: "根连接租约与关闭韧性：实现正常 detach、heartbeat expiry、grace reconnect、最后连接 shutdown 和 Broker全局 idle"
+    exit_signal: "A 创建长 Turn后退出或被 kill，B仍能等待/操作；最后客户端离开才收束 runtime；grace重连前后 workspace lock token相同"
+    status: done
+  - id: S5
+    action: "安全、升级与失败恢复：加固 descriptor权限、credential脱敏、protocol mismatch、Broker crash和 Workspace半初始化重试"
+    exit_signal: "安全/版本/崩溃矩阵全部通过，活跃旧 Broker不被新版前端杀死，snapshot/session恢复不静默降级"
+    status: done
+  - id: S6
+    action: "跨 Workspace diagnostics与发布闭环：锁定 Top机器级视图，完成双 Workspace、tarball、PTY、package smoke和真实 Host验证"
+    exit_signal: "Top同时展示多个 Workspace且不启动 Broker；pnpm run check、test:tui-e2e、tarball smoke及 Codex/Claude双根实机证据全部通过"
+    status: done
+
+checks:
+  - id: C01
+    step: S0
+    assertion: "现有单客户端 roots、restart、lock release和13-tool lifecycle基线在微重构前后等价"
+    status: done
+  - id: C02
+    step: S1
+    assertion: "独立 broker-lock保证并发前端最终只产生一个0600 ready descriptor；credential不出现在argv、日志、snapshot或diagnostics"
+    status: done
+  - id: C03
+    step: S1
+    assertion: "stale/损坏/半写 descriptor和Broker SIGKILL可由下一连接安全恢复"
+    status: done
+  - id: C04
+    step: S2
+    assertion: "stateful bridge按session id等待reverse-ready；延迟时成功，GET 405/SSE断开/timeout时以独立错误fail closed而非挂起或误报roots非法"
+    status: done
+  - id: C05
+    step: S2
+    assertion: "公开help、instructions、13 tools顺序、schema和annotations保持不变"
+    status: done
+  - id: C06
+    step: S3
+    assertion: "同canonical root set共享root actor和Agent树，roots顺序不影响key，双客户端不产生FACADE_ALREADY_RUNNING"
+    status: done
+  - id: C07
+    step: S3
+    assertion: "不同root set的snapshot、lock、actor、Agent树和cwd授权隔离"
+    status: done
+  - id: C08
+    step: S3
+    assertion: "同Workspace并发初始化只执行一次recover/bootstrap/runtime创建，失败不缓存"
+    status: done
+  - id: C09
+    step: S4
+    assertion: "A创建的managed Agent长Turn在A退出后保持loopback endpoint存活，B可继续wait/操作且不触发Facade shutdown"
+    status: done
+  - id: C10
+    step: S4
+    assertion: "最后租约离开后grace到期才shutdown；grace内重连取消旧epoch timer且重连前后Workspace lock token相等"
+    status: done
+  - id: C11
+    step: S5
+    assertion: "Broker internal protocol不兼容时不转发请求、不杀活跃owner，并给出无token错误"
+    status: done
+  - id: C12
+    step: S5
+    assertion: "Broker crash后persistent session遵循原requireExistingSession语义，不静默创建新session"
+    status: done
+  - id: C13
+    step: S6
+    assertion: "agents list/status/attach/top跨全部Workspace工作且绝不启动Broker或写状态；top Attach直接读取既有session record展示完整消息、thinking和tool call/result，不复制历史"
+    status: done
+  - id: C14
+    step: S6
+    assertion: "同Broker pid持有多个Workspace generation时Top选择、状态和Attach仍正确"
+    status: done
+  - id: C15
+    step: S6
+    assertion: "tarball临时安装、package smoke、TUI PTY和无参数stdio均无内部daemon输出或公开命令"
+    status: done
+  - id: C16
+    step: S6
+    assertion: "Codex与Claude双根实机可交叉管理Agent，Pi等内置runtime仍由capabilities发现"
+    status: done
+  - id: C17
+    step: S6
+    assertion: "Facade snapshot schema仍为cs-agent-mcp.facade.v1，diagnostics schema仍为cs-agent-mcp.diagnostics.v1"
+    status: done
+  - id: C18
+    step: S2
+    assertion: "同Broker并发初始化的A/B各自GET只标记匹配mcp-session-id的reverse-ready，不发生跨session误唤醒"
+    status: done

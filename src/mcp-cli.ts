@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 
 import path from "node:path";
-import { Command } from "commander";
+import { Command, Option } from "commander";
 import { resolveClaudeCodeExecutable } from "./acp/agent-command.js";
-import { loadResolvedConfig } from "./cli/config.js";
 import { runMcpServer } from "./mcp-server.js";
+import { runWorkspaceBroker } from "./mcp/broker/server.js";
 import {
   createAgentDiagnostics,
   type AgentDiagnosticSummary,
@@ -15,6 +15,7 @@ import { getAcpxVersion } from "./version.js";
 
 type CliOptions = {
   cwd: string;
+  internalBroker?: boolean;
 };
 
 type AgentsListOptions = {
@@ -238,13 +239,26 @@ async function main(argv: string[]): Promise<void> {
     .description("通过 MCP 创建、调用和编排本机编码 Agent")
     .version(getAcpxVersion())
     .option("--cwd <path>", "未提供 MCP workspace roots 时使用的工作目录", process.cwd())
+    .addOption(new Option("--internal-broker").hideHelp())
     .allowExcessArguments(false)
     .showHelpAfterError()
     .action(async (options: CliOptions) => {
       const cwd = path.resolve(options.cwd);
-      configureLocalClaude();
-      const config = await loadResolvedConfig(cwd);
-      await runMcpServer({ cwd, config });
+      if (options.internalBroker) {
+        configureLocalClaude();
+        const abort = new AbortController();
+        const stop = () => abort.abort();
+        process.once("SIGINT", stop);
+        process.once("SIGTERM", stop);
+        try {
+          await runWorkspaceBroker({ signal: abort.signal });
+        } finally {
+          process.off("SIGINT", stop);
+          process.off("SIGTERM", stop);
+        }
+        return;
+      }
+      await runMcpServer({ cwd });
     });
   program.addCommand(createAgentsCommand());
 

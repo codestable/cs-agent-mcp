@@ -1,6 +1,6 @@
 import type {
+  DiagnosticConversationItem,
   AgentDiagnosticSummary,
-  DiagnosticTimelineItem,
   DiagnosticWarning,
 } from "../index.js";
 
@@ -37,7 +37,7 @@ export type TopTerminal = TextMetrics & {
 
 export type AttachViewState = {
   agent: AgentDiagnosticSummary;
-  items: DiagnosticTimelineItem[];
+  items: DiagnosticConversationItem[];
   scrollOffset: number;
   unreadCount: number;
   trimmedCount: number;

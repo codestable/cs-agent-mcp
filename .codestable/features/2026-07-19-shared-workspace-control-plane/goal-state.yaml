@@ -1,0 +1,53 @@
+feature: "2026-07-19-shared-workspace-control-plane"
+status: complete
+baseline_ref: "3a5f14466a15c6b961dce45900fd0988c4f40964"
+stage: complete
+driver_kind: none
+driver_id: ""
+handoff_reason: ""
+handoff_next: ""
+current_iteration: 8
+blocker_signature: null
+blocker_count: 0
+owner_stop: null
+design: ".codestable/features/2026-07-19-shared-workspace-control-plane/shared-workspace-control-plane-design.md"
+checklist: ".codestable/features/2026-07-19-shared-workspace-control-plane/shared-workspace-control-plane-checklist.yaml"
+review: ".codestable/features/2026-07-19-shared-workspace-control-plane/shared-workspace-control-plane-review.md"
+qa: ".codestable/features/2026-07-19-shared-workspace-control-plane/shared-workspace-control-plane-qa.md"
+acceptance: ".codestable/features/2026-07-19-shared-workspace-control-plane/shared-workspace-control-plane-acceptance.md"
+ledger:
+  - step_id: S0
+    status: done
+    commit_range: "working-tree (no commit requested)"
+    evidence: "format + typecheck + 27/27 targeted regression + pnpm run check 226/226"
+    iteration: 1
+  - step_id: S1
+    status: done
+    commit_range: "working-tree (no commit requested)"
+    evidence: "0600 atomic descriptor/broker lock, credential health handshake, concurrent startup, stale/corrupt recovery, spawn error and protocol replacement E2E"
+    iteration: 2
+  - step_id: S2
+    status: done
+    commit_range: "working-tree (no commit requested)"
+    evidence: "stateful stdio/HTTP bridge, standalone GET SSE, delayed roots, 405/disconnect/5000ms timeout and mcp-session-id isolation E2E"
+    iteration: 2
+  - step_id: S3
+    status: done
+    commit_range: "working-tree (no commit requested)"
+    evidence: "same-root initialization merge and Agent-tree sharing; reversed roots and distinct Workspace isolation; slow-init SIGKILL join"
+    iteration: 2
+  - step_id: S4
+    status: done
+    commit_range: "working-tree (no commit requested)"
+    evidence: "cross-client wait/cancel/events/create/destroy, lease expiry, delayed grace reconnect token equality and ordered shutdown/error propagation"
+    iteration: 3
+  - step_id: S5
+    status: done
+    commit_range: "working-tree (no commit requested)"
+    evidence: "active-session upgrade protection, repeated replacement spawn, Broker SIGKILL persistent resume/fail-closed, process-generation and stale contender hardening"
+    iteration: 3
+  - step_id: S6
+    status: done
+    commit_range: "working-tree (no commit requested)"
+    evidence: "fresh pnpm run check 255/255; tarball MCP SDK 13-tools lifecycle and PTY conversation Attach passed; real Codex and Claude roots shared Broker pid 27871 and lock token 052072e9; owner-facing isolated tarball replay cross-managed lifecycle/cancel/post-Claude Codex reuse/top and final Broker/lock cleanup passed"
+    iteration: 8

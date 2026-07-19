@@ -2,6 +2,9 @@ import { watch } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { parseSessionRecord } from "../../session/persistence/parse.js";
+import { projectConversation, type DiagnosticConversation } from "./conversation.js";
+export type { DiagnosticConversation, DiagnosticConversationItem } from "./conversation.js";
 import type {
   Agent,
   FacadeErrorShape,
@@ -129,6 +132,7 @@ export type AgentDiagnostics = {
     warnings: DiagnosticWarning[];
   }>;
   resolveAgent(selector: string): Promise<AgentSelectorResult>;
+  readConversation(selector: string): Promise<DiagnosticConversation | undefined>;
   attachAgent(
     selector: string,
     options?: { history?: number; signal?: AbortSignal },
@@ -137,6 +141,7 @@ export type AgentDiagnostics = {
 
 type AgentDiagnosticsOptions = {
   facadesDir?: string;
+  sessionsDir?: string;
   probeLock?: (lockPath: string) => Promise<FacadeProcessLockProbe>;
   readFile?: (filePath: string) => Promise<string>;
   watchFacadeChanges?: WatchFacadeChanges;
@@ -159,6 +164,7 @@ type Scheduler = {
 
 type AgentDiagnosticsRuntime = {
   facadesDir: string;
+  sessionsDir: string;
   probeLock: (lockPath: string) => Promise<FacadeProcessLockProbe>;
   readFile: (filePath: string) => Promise<string>;
   watchFacadeChanges: WatchFacadeChanges;
@@ -226,6 +232,7 @@ const FACADE_EVENT_TYPES = [
 export function createAgentDiagnostics(options: AgentDiagnosticsOptions = {}): AgentDiagnostics {
   const {
     facadesDir,
+    sessionsDir,
     probeLock,
     readFile,
     watchFacadeChanges,
@@ -573,6 +580,33 @@ export function createAgentDiagnostics(options: AgentDiagnosticsOptions = {}): A
       return resolveFromInstances(selector, instances, warnings);
     },
 
+    async readConversation(selector: string) {
+      const resolved = await readTarget(selector);
+      if (!resolved.found) {
+        throw new Error(resolved.message);
+      }
+      const { agent } = resolved.target;
+      if (agent.kind !== "managed") {
+        return undefined;
+      }
+      const recordId = `mcp-${agent.rootExecutionId}-${agent.agentId}`;
+      const recordPath = path.join(sessionsDir, `${encodeURIComponent(recordId)}.json`);
+      let raw: unknown;
+      try {
+        raw = await readJson(recordPath, readFile);
+      } catch (error) {
+        if (hasErrorCode(error, "ENOENT")) {
+          return undefined;
+        }
+        throw error;
+      }
+      const record = parseSessionRecord(raw);
+      if (!record || record.acpxRecordId !== recordId) {
+        throw new Error(`Invalid ACP session record for ${recordId}`);
+      }
+      return projectConversation(record);
+    },
+
     async *attachAgent(selector: string, options = {}) {
       const history = clampHistory(options.history);
       const prepared = await prepareAttach(selector, history);
@@ -586,6 +620,10 @@ function resolveAgentDiagnosticsRuntime(options: AgentDiagnosticsOptions): Agent
     facadesDir: withDefault(
       options.facadesDir,
       path.join(os.homedir(), ".cs-agent-mcp", "mcp", "facades"),
+    ),
+    sessionsDir: withDefault(
+      options.sessionsDir,
+      path.join(os.homedir(), ".cs-agent-mcp", "sessions"),
     ),
     probeLock: withDefault(options.probeLock, probeFacadeProcessLock),
     readFile: withDefault(options.readFile, defaultReadFile),

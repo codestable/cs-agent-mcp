@@ -29,6 +29,7 @@ class HttpRequestError extends Error {
 
 export type FacadeHttpServer = {
   url: string;
+  stopAccepting(): void;
   close(): Promise<void>;
 };
 
@@ -151,6 +152,8 @@ export async function startFacadeHttpServer(
   options: FacadeHttpServerOptions,
 ): Promise<FacadeHttpServer> {
   const sessions = new Map<string, HttpSession>();
+  let stopping = false;
+  let serverClose: Promise<void> | undefined;
   const nodeServer = http.createServer((request, response) => {
     void handleRequest(request, response);
   });
@@ -160,8 +163,14 @@ export async function startFacadeHttpServer(
     response: ServerResponse,
   ): Promise<void> => {
     try {
+      if (stopping) {
+        throw new HttpRequestError(503, "MCP facade is shutting down");
+      }
       validateRequest(request);
       const actor = await authenticateRequest(request, options.identity);
+      if (stopping) {
+        throw new HttpRequestError(503, "MCP facade is shutting down");
+      }
       const requestedSessionId = sessionId(request);
       if (requestedSessionId) {
         await handleExistingSession({
@@ -181,16 +190,36 @@ export async function startFacadeHttpServer(
   };
 
   const port = await listen(nodeServer);
+  const stopAccepting = () => {
+    if (serverClose) {
+      return;
+    }
+    stopping = true;
+    serverClose = new Promise<void>((resolve, reject) => {
+      nodeServer.close((error) => (error ? reject(error) : resolve()));
+    });
+  };
   return {
     url: `http://127.0.0.1:${port}/mcp`,
+    stopAccepting,
     async close(): Promise<void> {
+      stopAccepting();
       const activeSessions = [...sessions.values()];
       sessions.clear();
-      await Promise.allSettled(activeSessions.map(async (session) => await session.server.close()));
-      await new Promise<void>((resolve, reject) => {
-        nodeServer.close((error) => (error ? reject(error) : resolve()));
-        nodeServer.closeAllConnections();
-      });
+      const sessionResults = await Promise.allSettled(
+        activeSessions.map(async (session) => await session.server.close()),
+      );
+      nodeServer.closeAllConnections();
+      const listenerResult = await Promise.allSettled([serverClose]);
+      const failures = [...sessionResults, ...listenerResult]
+        .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+        .map((result): unknown => result.reason);
+      if (failures.length > 0) {
+        throw new AggregateError(
+          failures,
+          "One or more managed MCP HTTP resources failed to close",
+        );
+      }
     },
   };
 }

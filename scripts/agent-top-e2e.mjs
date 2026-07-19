@@ -12,6 +12,7 @@ const installPrefix = path.join(tempRoot, "install");
 const home = path.join(tempRoot, "home");
 const workspace = path.join(home, "workspace");
 const facadesDir = path.join(home, ".cs-agent-mcp", "mcp", "facades");
+const sessionsDir = path.join(home, ".cs-agent-mcp", "sessions");
 const rawLog = path.join(tempRoot, "terminal.log");
 const expectScript = path.join(tempRoot, "agent-top.exp");
 const npmCache = process.env.NPM_CONFIG_CACHE ?? path.join(tempRoot, "npm-cache");
@@ -22,6 +23,7 @@ try {
     fs.mkdir(installPrefix, { recursive: true }),
     fs.mkdir(workspace, { recursive: true }),
     fs.mkdir(facadesDir, { recursive: true }),
+    fs.mkdir(sessionsDir, { recursive: true }),
   ]);
 
   const packed = await run("npm", ["pack", "--pack-destination", packDir], {
@@ -106,6 +108,67 @@ try {
     `${JSON.stringify({ pid: process.pid, token: "agent-top-e2e", createdAt: timestamp })}\n`,
     "utf8",
   );
+  const recordId = `mcp-root-e2e-${managedAgentId}`;
+  const sessionRecord = {
+    schema: "acpx.session.v1",
+    acpx_record_id: recordId,
+    acp_session_id: "native-e2e-session",
+    agent_command: "claude",
+    cwd: workspace,
+    name: recordId,
+    created_at: timestamp,
+    last_used_at: timestamp,
+    last_seq: 0,
+    event_log: {
+      active_path: ".stream.ndjson",
+      segment_count: 1,
+      max_segment_bytes: 1024,
+      max_segments: 1,
+      last_write_at: timestamp,
+      last_write_error: null,
+    },
+    closed: false,
+    title: "Agent Top conversation",
+    messages: [
+      { User: { id: "user-1", content: [{ Text: "Inspect the workspace lock." }] } },
+      {
+        Agent: {
+          content: [
+            { Thinking: { text: "I should inspect the ownership record." } },
+            {
+              ToolUse: {
+                id: "tool-1",
+                name: "Read",
+                raw_input: "",
+                input: { path: "lock.json" },
+                is_input_complete: true,
+              },
+            },
+            {
+              Text: "The owner remains root-e2e. This explanation intentionally wraps across terminal rows and preserves CONVERSATION-TAIL.",
+            },
+          ],
+          tool_results: {
+            "tool-1": {
+              tool_use_id: "tool-1",
+              tool_name: "Read",
+              is_error: false,
+              content: { Text: '{"owner":"root-e2e"}' },
+            },
+          },
+        },
+      },
+    ],
+    updated_at: timestamp,
+    cumulative_token_usage: {},
+    request_token_usage: {},
+    acpx: {},
+  };
+  await fs.writeFile(
+    path.join(sessionsDir, `${encodeURIComponent(recordId)}.json`),
+    `${JSON.stringify(sessionRecord)}\n`,
+    "utf8",
+  );
 
   await fs.writeFile(expectScript, buildExpectScript({ binary, home, rawLog, tempRoot }), "utf8");
   try {
@@ -122,7 +185,12 @@ try {
   const terminalOutput = await fs.readFile(rawLog);
   assertBufferIncludes(terminalOutput, "__TTY_RESTORED__:0:0", "cooked terminal state");
   assertBufferIncludes(terminalOutput, "zzz-worker | claude | idle", "managed Attach view");
-  assertBufferIncludes(terminalOutput, "e2e output", "Attach event history");
+  assertBufferIncludes(terminalOutput, "YOU    Inspect the workspace lock.", "user message");
+  assertBufferIncludes(terminalOutput, "THINKING", "agent thinking");
+  assertBufferIncludes(terminalOutput, "TOOL   Read", "tool call");
+  assertBufferIncludes(terminalOutput, "AGENT  The owner remains root-e2e", "agent message");
+  assertBufferIncludes(terminalOutput, "RESULT Read", "tool result");
+  assertBufferIncludes(terminalOutput, "CONVERSATION-TAIL", "wrapped conversation tail");
   assertBufferIncludes(terminalOutput, "Terminal too small", "resize state");
   assertBufferIncludes(terminalOutput, "\u001b[?1049h", "alternate screen enable");
   assertBufferIncludes(terminalOutput, "\u001b[?1049l", "alternate screen disable");
@@ -175,7 +243,10 @@ send -- "\\033\\[<0;2;5M"
 send -- "\\033\\[<0;2;5m"
 send -- "\\r"
 wait_for "zzz-worker | claude | idle" "managed Attach view"
-wait_for "e2e output" "Attach history"
+wait_for "YOU    Inspect the workspace lock." "Attach user message"
+wait_for "TOOL   Read" "Attach tool call"
+wait_for "CONVERSATION-TAIL" "Attach wrapped message"
+wait_for "RESULT Read" "Attach tool result"
 send -- "\\033"
 wait_for "managed 1" "list after Esc"
 exec stty -f $spawn_out(slave,name) rows 8 columns 40

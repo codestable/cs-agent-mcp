@@ -941,6 +941,8 @@ export class MultiAgentFacade {
     string,
     ReturnType<AgentRuntimeAdapter["startTurn"]>
   >();
+  private closed = false;
+  private shutdownOperation?: Promise<void>;
 
   constructor(options: MultiAgentFacadeOptions) {
     this.options = options;
@@ -950,7 +952,16 @@ export class MultiAgentFacade {
     this.allowedCwdRoots = options.allowedCwdRoots.map((root) => canonicalizeWorkspacePath(root));
   }
 
+  private assertOpen(): void {
+    if (this.closed) {
+      throw new FacadeError("SESSION_RESUME_REQUIRED", "The MCP facade is shutting down", {
+        retryable: true,
+      });
+    }
+  }
+
   async bootstrapRoot(input: { agent: string; cwd: string; name?: string }): Promise<Agent> {
+    this.assertOpen();
     const cwd = this.resolveCwd(input.cwd);
     const existing = await this.options.store.read((snapshot) =>
       Object.values(snapshot.agents).find(
@@ -993,6 +1004,7 @@ export class MultiAgentFacade {
   }
 
   async recoverAfterRestart(): Promise<void> {
+    this.assertOpen();
     const revokedAgentIds = await this.options.store.update((snapshot) => {
       const timestamp = this.timestamp();
       const revoked = recoverManagedAgents(snapshot, timestamp);
@@ -1005,44 +1017,96 @@ export class MultiAgentFacade {
     );
   }
 
-  async shutdown(): Promise<void> {
-    const agentIds = await this.options.store.update((snapshot) => {
-      const timestamp = this.timestamp();
-      const ids = prepareAgentsForShutdown(snapshot, timestamp);
-      cancelTurnsForShutdown(snapshot, timestamp);
-      cancelPermissionsForShutdown(snapshot, timestamp);
-      return ids;
-    });
+  shutdown(): Promise<void> {
+    this.closed = true;
+    this.shutdownOperation ??= this.performShutdown();
+    return this.shutdownOperation;
+  }
+
+  private async performShutdown(): Promise<void> {
+    const failures: unknown[] = [];
+    let agentIds: string[] = [];
+    try {
+      agentIds = await this.options.store.update((snapshot) => {
+        const timestamp = this.timestamp();
+        const ids = prepareAgentsForShutdown(snapshot, timestamp);
+        cancelTurnsForShutdown(snapshot, timestamp);
+        cancelPermissionsForShutdown(snapshot, timestamp);
+        return ids;
+      });
+    } catch (error) {
+      failures.push(error);
+    }
+
     for (const waiter of this.permissionWaiters.values()) {
       waiter.resolve({ outcome: "cancel" });
       clearTimeout(waiter.timeout);
       waiter.signal.removeEventListener("abort", waiter.onAbort);
     }
     this.permissionWaiters.clear();
-    await Promise.allSettled(
+
+    const cancelledTurns = await Promise.allSettled(
       [...this.activeRuntimeTurns.values()].map(async (turn) =>
         turn.cancel({ reason: "facade shutdown" }),
       ),
     );
-    await Promise.allSettled(
-      agentIds.map(async (agentId) => {
-        await this.options.identity.revokeAgent(agentId);
-        await this.options.runtime.destroyAgent(agentId, { discardSession: false });
-      }),
+    failures.push(
+      ...cancelledTurns
+        .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+        .map((result): unknown => result.reason),
     );
-    await this.options.store.update((snapshot) => {
-      const timestamp = this.timestamp();
-      for (const agentId of agentIds) {
-        const agent = snapshot.agents[agentId];
-        if (!agent || agent.state === "destroyed") {
-          continue;
-        }
-        agent.state = "dormant";
-        delete agent.activeTurnId;
-        agent.queueDepth = 0;
-        agent.updatedAt = timestamp;
+
+    const revoked = await Promise.allSettled(
+      agentIds.map(async (agentId) => await this.options.identity.revokeAgent(agentId)),
+    );
+    failures.push(
+      ...revoked
+        .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+        .map((result): unknown => result.reason),
+    );
+
+    if (this.options.runtime.shutdown) {
+      try {
+        await this.options.runtime.shutdown();
+      } catch (error) {
+        failures.push(error);
       }
-    });
+    } else {
+      const destroyed = await Promise.allSettled(
+        agentIds.map(async (agentId) =>
+          this.options.runtime.destroyAgent(agentId, { discardSession: false }),
+        ),
+      );
+      failures.push(
+        ...destroyed
+          .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+          .map((result): unknown => result.reason),
+      );
+    }
+
+    if (agentIds.length > 0) {
+      try {
+        await this.options.store.update((snapshot) => {
+          const timestamp = this.timestamp();
+          for (const agentId of agentIds) {
+            const agent = snapshot.agents[agentId];
+            if (!agent || agent.state === "destroyed") {
+              continue;
+            }
+            agent.state = "dormant";
+            delete agent.activeTurnId;
+            agent.queueDepth = 0;
+            agent.updatedAt = timestamp;
+          }
+        });
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+
+    if (failures.length > 0) {
+      throw new AggregateError(failures, "One or more MCP facade resources failed to shut down");
+    }
   }
 
   async capabilities(
@@ -1057,6 +1121,7 @@ export class MultiAgentFacade {
       reason?: string;
     }>;
   }> {
+    this.assertOpen();
     await this.options.store.read((snapshot) => requireActor(snapshot, actor));
     const requested = new Set(input.probeAgents ?? []);
     const agents = await Promise.all(
@@ -1110,6 +1175,7 @@ export class MultiAgentFacade {
     },
     actor: FacadeActor,
   ): Promise<{ agents: Agent[]; nextCursor?: string; hasMore: boolean }> {
+    this.assertOpen();
     return await this.options.store.read((snapshot) => {
       requireActor(snapshot, actor);
       if (input.parentAgentId) {
@@ -1145,6 +1211,7 @@ export class MultiAgentFacade {
     pendingPermission?: Permission;
     runtime?: Awaited<ReturnType<AgentRuntimeAdapter["getStatus"]>>;
   }> {
+    this.assertOpen();
     const snapshot = await this.options.store.read((value) => {
       const agent = requireVisibleAgent(value, actor, input.agentId);
       const pendingPermission = Object.values(value.permissions).find(
@@ -1176,6 +1243,7 @@ export class MultiAgentFacade {
     actor: FacadeActor,
     audit?: MutationAuditContext,
   ): Promise<Agent> {
+    this.assertOpen();
     const parent = await this.options.store.read((snapshot) => requireActor(snapshot, actor));
     if (parent.depth >= this.limits.maxDelegationDepth) {
       throw new FacadeError(
@@ -1321,6 +1389,7 @@ export class MultiAgentFacade {
     actor: FacadeActor,
     audit?: MutationAuditContext,
   ): Promise<SendReceipt> {
+    this.assertOpen();
     if (!input.idempotencyKey.trim()) {
       throw new FacadeError("IDEMPOTENCY_CONFLICT", "idempotencyKey must not be empty");
     }
@@ -1352,6 +1421,7 @@ export class MultiAgentFacade {
   }
 
   async getTurn(input: { turnId: string }, actor: FacadeActor): Promise<Turn> {
+    this.assertOpen();
     return await this.options.store.read((snapshot) => {
       const turn = snapshot.turns[input.turnId];
       if (!turn) {
@@ -1366,6 +1436,7 @@ export class MultiAgentFacade {
     input: { turnId: string; afterRevision?: number; waitMs?: number },
     actor: FacadeActor,
   ): Promise<WaitTurnResult> {
+    this.assertOpen();
     const waitMs = Math.min(Math.max(input.waitMs ?? 0, 0), this.limits.maxWaitMs);
     const deadline = this.now() + waitMs;
     const afterRevision = input.afterRevision ?? -1;
@@ -1394,6 +1465,7 @@ export class MultiAgentFacade {
   }
 
   async getMessage(input: { messageId: string }, actor: FacadeActor): Promise<Message> {
+    this.assertOpen();
     return await this.options.store.read((snapshot) => {
       const message = snapshot.messages[input.messageId];
       if (!message) {
@@ -1409,6 +1481,7 @@ export class MultiAgentFacade {
     actor: FacadeActor,
     audit?: MutationAuditContext,
   ): Promise<Permission> {
+    this.assertOpen();
     const timestamp = this.timestamp();
     const permission = await this.options.store.update((snapshot) => {
       const wasResolved = snapshot.permissions[input.permissionId]?.state === "resolved";
@@ -1437,6 +1510,7 @@ export class MultiAgentFacade {
     actor: FacadeActor,
     audit?: MutationAuditContext,
   ): Promise<Turn> {
+    this.assertOpen();
     const activeTurnIds: string[] = [];
     const cancelledPermissionIds: string[] = [];
     const timestamp = this.timestamp();
@@ -1482,6 +1556,7 @@ export class MultiAgentFacade {
     actor: FacadeActor,
     audit?: MutationAuditContext,
   ): Promise<Agent> {
+    this.assertOpen();
     const selection = await this.options.store.update((snapshot) => {
       const target = requireVisibleAgent(snapshot, actor, input.agentId);
       if (target.kind !== "managed") {
@@ -1640,6 +1715,7 @@ export class MultiAgentFacade {
     input: { turnId: string; waitMs?: number },
     actor: FacadeActor,
   ): Promise<WaitMessageResult> {
+    this.assertOpen();
     const waitMs = Math.min(Math.max(input.waitMs ?? 0, 0), this.limits.maxWaitMs);
     const deadline = this.now() + waitMs;
     let turn = await this.getTurn({ turnId: input.turnId }, actor);
@@ -1668,6 +1744,7 @@ export class MultiAgentFacade {
   }
 
   async events(input: EventsInput, actor: FacadeActor): Promise<EventsPage> {
+    this.assertOpen();
     const waitMs = Math.min(Math.max(input.waitMs ?? 0, 0), this.limits.maxWaitMs);
     const deadline = this.now() + waitMs;
     while (true) {
@@ -1702,7 +1779,7 @@ export class MultiAgentFacade {
     request: AcpPermissionRequest,
     signal: AbortSignal,
   ): Promise<AcpPermissionDecision | undefined> {
-    if (signal.aborted) {
+    if (signal.aborted || this.closed) {
       return { outcome: "cancel" };
     }
     const permission = await this.options.store.update((snapshot) => {
@@ -1806,6 +1883,9 @@ export class MultiAgentFacade {
   }
 
   private scheduleDrain(agentId: string): void {
+    if (this.closed) {
+      return;
+    }
     if (this.drainingAgents.has(agentId)) {
       return;
     }
@@ -1949,6 +2029,9 @@ export class MultiAgentFacade {
   }
 
   private async drainAgent(agentId: string): Promise<void> {
+    if (this.closed) {
+      return;
+    }
     while (true) {
       const work = await this.claimQueuedTurn(agentId);
       if (!work) {
@@ -2036,6 +2119,9 @@ export class MultiAgentFacade {
   }
 
   private async scheduleQueuedAgents(rootExecutionId: string): Promise<void> {
+    if (this.closed) {
+      return;
+    }
     const agentIds = await this.options.store.read((snapshot) => {
       const queuedAgentIds = new Set(
         Object.values(snapshot.turns)

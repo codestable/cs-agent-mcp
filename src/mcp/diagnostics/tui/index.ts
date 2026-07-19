@@ -1,12 +1,6 @@
 import type { AgentDiagnostics, AgentDiagnosticSummary } from "../index.js";
-import {
-  appendTimelineItem,
-  moveSelection,
-  reconcileSelection,
-  scrollAttach,
-  visibleAgents,
-} from "./model.js";
-import { renderTop } from "./render.js";
+import { moveSelection, reconcileSelection, scrollAttach, visibleAgents } from "./model.js";
+import { countAttachLines, renderTop } from "./render.js";
 import type { AgentsTopState, TerminalEvent, TopFrame, TopTerminal } from "./types.js";
 
 const DEFAULT_REFRESH_MS = 1_000;
@@ -65,6 +59,9 @@ class AgentsTopController {
   private attachAbort?: AbortController;
   private attachPump?: Promise<void>;
   private attachGeneration = 0;
+  private conversationRefreshPump?: Promise<void>;
+  private conversationRefreshQueued = false;
+  private conversationRefreshGeneration = 0;
   private listEpoch = 0;
   private lastFrame: TopFrame = { lines: [], rowAgentIds: new Map() };
   private done = false;
@@ -104,7 +101,11 @@ class AgentsTopController {
       this.render();
       void this.requestRefresh();
       this.refreshTimer = setInterval(() => {
-        void this.requestRefresh();
+        if (this.state.mode === "attach") {
+          void this.refreshAttachConversation(this.attachGeneration);
+        } else {
+          void this.requestRefresh();
+        }
       }, this.refreshMs);
       if (this.signal?.aborted) {
         this.finish(this.signalExitCode());
@@ -117,10 +118,11 @@ class AgentsTopController {
       }
       this.listEpoch += 1;
       this.attachGeneration += 1;
+      this.conversationRefreshQueued = false;
       this.attachAbort?.abort();
-      await this.attachPump;
       this.terminal.setEventHandler(undefined);
       await this.terminal.stop();
+      await this.attachPump;
     }
   }
 
@@ -211,6 +213,7 @@ class AgentsTopController {
       return;
     }
     const page = Math.max(1, this.terminal.height - 5);
+    const contentLength = countAttachLines(attach.items, this.terminal.width, this.terminal);
     switch (name) {
       case "q":
         this.finish(0);
@@ -220,23 +223,23 @@ class AgentsTopController {
         return;
       case "UP":
       case "k":
-        this.state.attach = scrollAttach(attach, 1, false, page);
+        this.state.attach = scrollAttach(attach, 1, false, page, contentLength);
         break;
       case "DOWN":
       case "j":
-        this.state.attach = scrollAttach(attach, -1, false, page);
+        this.state.attach = scrollAttach(attach, -1, false, page, contentLength);
         break;
       case "PAGE_UP":
-        this.state.attach = scrollAttach(attach, page, false, page);
+        this.state.attach = scrollAttach(attach, page, false, page, contentLength);
         break;
       case "PAGE_DOWN":
-        this.state.attach = scrollAttach(attach, -page, false, page);
+        this.state.attach = scrollAttach(attach, -page, false, page, contentLength);
         break;
       case "HOME":
-        this.state.attach = scrollAttach(attach, attach.items.length, false, page);
+        this.state.attach = scrollAttach(attach, contentLength, false, page, contentLength);
         break;
       case "END":
-        this.state.attach = scrollAttach(attach, 0, true, page);
+        this.state.attach = scrollAttach(attach, 0, true, page, contentLength);
         break;
       default:
         return;
@@ -275,10 +278,15 @@ class AgentsTopController {
   private handleMouse(event: Extract<TerminalEvent, { type: "mouse" }>): void {
     if (this.state.mode === "attach" && this.state.attach) {
       const visibleItems = Math.max(1, this.terminal.height - 5);
+      const contentLength = countAttachLines(
+        this.state.attach.items,
+        this.terminal.width,
+        this.terminal,
+      );
       if (event.name === "MOUSE_WHEEL_UP") {
-        this.state.attach = scrollAttach(this.state.attach, 3, false, visibleItems);
+        this.state.attach = scrollAttach(this.state.attach, 3, false, visibleItems, contentLength);
       } else if (event.name === "MOUSE_WHEEL_DOWN") {
-        this.state.attach = scrollAttach(this.state.attach, -3, false, visibleItems);
+        this.state.attach = scrollAttach(this.state.attach, -3, false, visibleItems, contentLength);
       } else {
         return;
       }
@@ -328,6 +336,7 @@ class AgentsTopController {
     };
     this.render();
     this.startAttach(agent);
+    void this.refreshAttachConversation(this.attachGeneration);
   }
 
   private startAttach(agent: AgentDiagnosticSummary): void {
@@ -353,6 +362,7 @@ class AgentsTopController {
       while (true) {
         const next = await stream.next();
         if (next.done) {
+          await this.refreshAttachConversation(generation);
           if (this.isCurrentAttach(generation) && !this.state.attach?.terminalReason) {
             this.state.message = `attach ended with exit code ${next.value}`;
             this.state.messageKind = next.value === 0 ? "normal" : "warning";
@@ -367,8 +377,13 @@ class AgentsTopController {
         if (!attach) {
           return;
         }
-        this.state.attach = appendTimelineItem(attach, next.value);
-        this.render();
+        if (next.value.kind === "snapshot") {
+          this.state.attach = { ...attach, agent: next.value.agent };
+          this.render();
+        } else if (next.value.kind === "terminal") {
+          this.state.attach = { ...attach, terminalReason: next.value.reason };
+          this.render();
+        }
       }
     } catch (cause) {
       if (signal.aborted || !this.isCurrentAttach(generation)) {
@@ -381,22 +396,96 @@ class AgentsTopController {
   }
 
   private async returnToList(): Promise<void> {
+    const attachAbort = this.attachAbort;
+    const attachPump = this.attachPump;
     this.attachGeneration += 1;
-    this.attachAbort?.abort();
-    await this.attachPump;
-    this.attachPump = undefined;
-    this.attachAbort = undefined;
+    this.conversationRefreshQueued = false;
+    attachAbort?.abort();
     this.state.mode = "list";
     this.state.attach = undefined;
     this.state.message = undefined;
     this.state.messageKind = undefined;
     this.state.loading = true;
     this.render();
+    await attachPump;
+    if (this.attachPump === attachPump) {
+      this.attachPump = undefined;
+    }
+    if (this.attachAbort === attachAbort) {
+      this.attachAbort = undefined;
+    }
     await this.requestRefresh();
   }
 
   private isCurrentAttach(generation: number): boolean {
     return this.state.mode === "attach" && generation === this.attachGeneration;
+  }
+
+  private refreshAttachConversation(generation: number): Promise<void> {
+    if (!this.isCurrentAttach(generation)) {
+      return Promise.resolve();
+    }
+    this.conversationRefreshQueued = true;
+    this.conversationRefreshGeneration = generation;
+    if (!this.conversationRefreshPump) {
+      this.conversationRefreshPump = this.drainConversationRefreshes();
+    }
+    return this.conversationRefreshPump;
+  }
+
+  private async drainConversationRefreshes(): Promise<void> {
+    try {
+      while (this.conversationRefreshQueued) {
+        this.conversationRefreshQueued = false;
+        await this.performConversationRefresh(this.conversationRefreshGeneration);
+      }
+    } finally {
+      this.conversationRefreshPump = undefined;
+    }
+  }
+
+  // oxlint-disable-next-line complexity -- guards async generation state before viewport updates
+  private async performConversationRefresh(generation: number): Promise<void> {
+    const attach = this.state.attach;
+    if (!attach || !this.isCurrentAttach(generation)) {
+      return;
+    }
+    try {
+      const conversation = await this.diagnostics.readConversation(attach.agent.agentId);
+      if (!conversation || !this.isCurrentAttach(generation) || !this.state.attach) {
+        return;
+      }
+      const current = this.state.attach;
+      const previousLineCount = countAttachLines(current.items, this.terminal.width, this.terminal);
+      const nextLineCount = countAttachLines(
+        conversation.items,
+        this.terminal.width,
+        this.terminal,
+      );
+      const addedLineCount = Math.max(0, nextLineCount - previousLineCount);
+      const paused = current.scrollOffset > 0;
+      const next = {
+        ...current,
+        items: conversation.items,
+        scrollOffset: paused ? current.scrollOffset + addedLineCount : 0,
+        unreadCount: paused ? current.unreadCount + addedLineCount : 0,
+      };
+      this.state.attach = scrollAttach(
+        next,
+        0,
+        false,
+        Math.max(1, this.terminal.height - 5),
+        nextLineCount,
+      );
+      this.render();
+    } catch (cause) {
+      if (!this.isCurrentAttach(generation)) {
+        return;
+      }
+      this.state.message = cause instanceof Error ? cause.message : String(cause);
+      this.state.messageKind = "error";
+      this.render();
+    }
   }
 
   // oxlint-disable-next-line complexity -- owns serialized refresh, epoch validation, and stale merge

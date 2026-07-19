@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { AgentDiagnosticSummary, DiagnosticTimelineItem } from "../index.js";
+import type { AgentDiagnosticSummary, DiagnosticConversationItem } from "../index.js";
 import { visibleAgents } from "./model.js";
 import { sanitizeTerminalText } from "./sanitize.js";
 import type { AgentsTopState, TextMetrics, TopFrame, TopSegment, TopStyle } from "./types.js";
@@ -141,22 +141,21 @@ function renderAttach(
 
   const bodyStart = 3;
   const bodyRows = height - bodyStart - 2;
-  const maxOffset = Math.max(0, attach.items.length - bodyRows);
+  const renderedItems = attachLines(attach.items, width, metrics);
+  const maxOffset = Math.max(0, renderedItems.length - bodyRows);
   const effectiveOffset = Math.min(attach.scrollOffset, maxOffset);
-  const endExclusive = Math.max(0, attach.items.length - effectiveOffset);
+  const endExclusive = Math.max(0, renderedItems.length - effectiveOffset);
   const start = Math.max(0, endExclusive - bodyRows);
-  const visible = attach.items.slice(start, endExclusive);
+  const visible = renderedItems.slice(start, endExclusive);
   for (let index = 0; index < visible.length; index += 1) {
-    const item = visible[index];
-    if (!item) {
+    const line = visible[index];
+    if (!line) {
       continue;
     }
-    lines[bodyStart - 1 + index] = [
-      segment(fit(timelineText(item), width, metrics), timelineStyle(item)),
-    ];
+    lines[bodyStart - 1 + index] = [segment(fit(line.text, width, metrics), line.style)];
   }
   if (visible.length === 0) {
-    lines[bodyStart - 1] = [segment("Waiting for events...", "muted")];
+    lines[bodyStart - 1] = [segment("Waiting for conversation...", "muted")];
   }
 
   const trimText = attach.trimmedCount > 0 ? ` | trimmed ${attach.trimmedCount}` : "";
@@ -170,6 +169,92 @@ function renderAttach(
     ),
   ];
   return { lines, rowAgentIds: new Map() };
+}
+
+type AttachItem = DiagnosticConversationItem;
+type AttachLine = { text: string; style: TopStyle };
+
+export function countAttachLines(items: AttachItem[], width: number, metrics: TextMetrics): number {
+  return attachLines(items, width, metrics).length;
+}
+
+function attachLines(items: AttachItem[], width: number, metrics: TextMetrics): AttachLine[] {
+  return items.flatMap((item) => {
+    const conversation = conversationText(item);
+    return wrapConversationText(conversation.prefix, conversation.text, width, metrics).map(
+      (text) => ({ text, style: timelineStyle(item) }),
+    );
+  });
+}
+
+function conversationText(item: AttachItem): { prefix: string; text: string } {
+  if (item.kind === "user") {
+    return { prefix: "YOU    ", text: item.text };
+  }
+  if (item.kind === "assistant") {
+    return { prefix: "AGENT  ", text: item.text };
+  }
+  if (item.kind === "resume") {
+    return { prefix: "SESSION  ", text: "resumed" };
+  }
+  if (item.kind === "thinking") {
+    return {
+      prefix: "THINKING  ",
+      text: item.redacted ? "[redacted_thinking]" : item.text,
+    };
+  }
+  if (item.kind === "tool_call") {
+    return { prefix: `TOOL   ${item.name}  `, text: item.input };
+  }
+  return { prefix: `${item.isError ? "ERROR" : "RESULT"} ${item.name}  `, text: item.text };
+}
+
+function wrapConversationText(
+  prefix: string,
+  text: string,
+  width: number,
+  metrics: TextMetrics,
+): string[] {
+  const rawPrefix = sanitizeTerminalText(prefix);
+  const prefixBudget = Math.max(1, Math.floor(width * 0.4));
+  const safePrefix =
+    metrics.measure(rawPrefix) > prefixBudget
+      ? `${metrics.truncate(rawPrefix, Math.max(1, prefixBudget - 1))} `
+      : rawPrefix;
+  const prefixWidth = metrics.measure(safePrefix);
+  const continuation = " ".repeat(prefixWidth);
+  const contentWidth = Math.max(1, width - prefixWidth);
+  const paragraphs = text.split(/\r\n|\r|\n/u);
+  const lines: string[] = [];
+  let first = true;
+  for (const paragraph of paragraphs) {
+    const wrapped = wrapVisibleText(sanitizeTerminalText(paragraph), contentWidth, metrics);
+    for (const line of wrapped) {
+      lines.push(`${first ? safePrefix : continuation}${line}`);
+      first = false;
+    }
+  }
+  return lines.length > 0 ? lines : [safePrefix];
+}
+
+function wrapVisibleText(text: string, width: number, metrics: TextMetrics): string[] {
+  if (!text) {
+    return [""];
+  }
+  const lines: string[] = [];
+  let remaining = text;
+  while (metrics.measure(remaining) > width) {
+    let candidate = metrics.truncate(remaining, width);
+    if (!candidate) {
+      candidate = Array.from(remaining)[0] ?? "";
+    }
+    const whitespace = candidate.search(/\s+\S*$/u);
+    const line = whitespace > 0 ? candidate.slice(0, whitespace) : candidate;
+    lines.push(line.trimEnd());
+    remaining = remaining.slice(line.length).trimStart();
+  }
+  lines.push(remaining);
+  return lines;
 }
 
 function renderSmallTerminal(width: number, height: number, metrics: TextMetrics): TopFrame {
@@ -238,28 +323,23 @@ function renderAgentColumns(
     .join(" ");
 }
 
-function timelineText(item: DiagnosticTimelineItem): string {
-  if (item.kind === "snapshot") {
-    return `snapshot ${item.agent.agentId.slice(0, 8)} ${item.agent.kind} ${item.agent.agent} ${item.agent.state}`;
-  }
-  if (item.kind === "terminal") {
-    return `terminal ${item.reason}`;
-  }
-  const summary =
-    item.event.type === "agent.created" && item.event.summary === item.event.type
-      ? "created"
-      : item.event.summary;
-  return `${item.event.timestamp.slice(11, 19)} ${item.event.type} ${summary}`;
-}
-
-function timelineStyle(item: DiagnosticTimelineItem): TopStyle {
-  if (item.kind === "terminal") {
-    return item.reason === "agent_destroyed" || item.reason === "interrupted" ? "warning" : "error";
-  }
-  if (item.kind === "snapshot") {
+function timelineStyle(item: DiagnosticConversationItem): TopStyle {
+  if (item.kind === "user") {
     return "accent";
   }
-  return item.event.type === "turn.failed" ? "error" : "normal";
+  if (item.kind === "assistant") {
+    return "normal";
+  }
+  if (item.kind === "resume") {
+    return "muted";
+  }
+  if (item.kind === "thinking") {
+    return "muted";
+  }
+  if (item.kind === "tool_call") {
+    return "accent";
+  }
+  return item.isError ? "error" : "normal";
 }
 
 function stateStyle(agent: AgentDiagnosticSummary, stale: boolean): TopStyle {

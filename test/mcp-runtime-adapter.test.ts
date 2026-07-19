@@ -72,6 +72,136 @@ test("acpx runtime adapter keeps one handle per managed agent and forwards scope
   assert.equal(turns[0]?.mode, "prompt");
 });
 
+test("acpx runtime adapter shutdown closes every tracked runtime without discarding sessions", async () => {
+  const closes: Array<{ sessionKey: string; discardPersistentState?: boolean }> = [];
+  const adapter = createAcpxRuntimeAdapter({
+    agents: ["claude"],
+    createRuntime: () => ({
+      async ensureSession(input: AcpRuntimeEnsureInput): Promise<AcpRuntimeHandle> {
+        return {
+          sessionKey: input.sessionKey,
+          backend: "acpx",
+          runtimeSessionName: input.sessionKey,
+        };
+      },
+      startTurn(input: AcpRuntimeTurnInput) {
+        return {
+          requestId: input.requestId,
+          events: (async function* () {})(),
+          result: Promise.resolve({ status: "completed" as const }),
+          cancel: async () => {},
+          closeStream: async () => {},
+        };
+      },
+      async getStatus() {
+        return { summary: "ready" };
+      },
+      async close(input: {
+        handle: AcpRuntimeHandle;
+        discardPersistentState?: boolean;
+      }): Promise<void> {
+        closes.push({
+          sessionKey: input.handle.sessionKey,
+          discardPersistentState: input.discardPersistentState,
+        });
+      },
+    }),
+  });
+  const input = (agentId: string): EnsureRuntimeAgentInput => ({
+    agentId,
+    rootExecutionId: "root-1",
+    sessionKey: `session-${agentId}`,
+    agent: "claude",
+    cwd: "/workspace",
+    mode: "persistent",
+    mcpServers: [],
+  });
+  await Promise.all(
+    ["one", "two"].map(async (agentId) =>
+      adapter.ensureAgent(input(agentId), { onPermissionRequest: async () => undefined }),
+    ),
+  );
+
+  await adapter.shutdown?.();
+
+  assert.deepEqual(
+    closes.toSorted((left, right) => left.sessionKey.localeCompare(right.sessionKey)),
+    [
+      { sessionKey: "session-one", discardPersistentState: false },
+      { sessionKey: "session-two", discardPersistentState: false },
+    ],
+  );
+  assert.throws(() => adapter.startTurn({ agentId: "one", text: "late", requestId: "late" }), {
+    code: "SESSION_RESUME_REQUIRED",
+  });
+});
+
+test("acpx runtime adapter rejects new work during shutdown and propagates close failures", async () => {
+  let releaseClose: () => void = () => undefined;
+  const closeGate = new Promise<void>((resolve) => {
+    releaseClose = resolve;
+  });
+  const adapter = createAcpxRuntimeAdapter({
+    agents: ["claude"],
+    createRuntime: () => ({
+      async ensureSession(input: AcpRuntimeEnsureInput): Promise<AcpRuntimeHandle> {
+        return {
+          sessionKey: input.sessionKey,
+          backend: "acpx",
+          runtimeSessionName: input.sessionKey,
+        };
+      },
+      startTurn(input: AcpRuntimeTurnInput) {
+        return {
+          requestId: input.requestId,
+          events: (async function* () {})(),
+          result: Promise.resolve({ status: "completed" as const }),
+          cancel: async () => {},
+          closeStream: async () => {},
+        };
+      },
+      async getStatus() {
+        return { summary: "ready" };
+      },
+      async close() {
+        await closeGate;
+        throw new Error("runtime close failed");
+      },
+    }),
+  });
+  const input: EnsureRuntimeAgentInput = {
+    agentId: "closing-agent",
+    rootExecutionId: "root-1",
+    sessionKey: "session-closing",
+    agent: "claude",
+    cwd: "/workspace",
+    mode: "persistent",
+    mcpServers: [],
+  };
+  await adapter.ensureAgent(input, { onPermissionRequest: async () => undefined });
+
+  const shutdown = adapter.shutdown?.();
+  assert.ok(shutdown);
+  await assert.rejects(
+    adapter.ensureAgent(
+      { ...input, agentId: "late-agent", sessionKey: "session-late" },
+      { onPermissionRequest: async () => undefined },
+    ),
+    { code: "SESSION_RESUME_REQUIRED" },
+  );
+  releaseClose();
+  await assert.rejects(shutdown, (error: unknown) => {
+    assert.ok(error instanceof AggregateError);
+    assert.equal(
+      error.errors.some(
+        (cause) => cause instanceof Error && cause.message === "runtime close failed",
+      ),
+      true,
+    );
+    return true;
+  });
+});
+
 test("acpx runtime adapter closes a pending initialization exactly once when destroyed", async () => {
   let releaseEnsure: (() => void) | undefined;
   const ensureGate = new Promise<void>((resolve) => {

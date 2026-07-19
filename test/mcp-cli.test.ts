@@ -85,6 +85,19 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<voi
   }
 }
 
+async function waitForNoWorkspaceLocks(home: string, timeoutMs = 5_000): Promise<void> {
+  const facadesDir = path.join(home, ".cs-agent-mcp", "mcp", "facades");
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const entries = await fs.readdir(facadesDir).catch(() => []);
+    if (!entries.some((entry) => entry.endsWith(".lock"))) {
+      return;
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`Timed out waiting for Workspace locks under ${facadesDir} to be released`);
+}
+
 async function waitForChildExit(child: ChildProcess, timeoutMs: number): Promise<number | null> {
   return await new Promise<number | null>((resolve, reject) => {
     const cleanup = () => {
@@ -197,6 +210,9 @@ test("cs-agent-mcp exposes agents diagnostics subcommands without starting stdio
   assert.equal(psHelp.code, 0);
   assert.equal(psHelp.stderr, "");
   assert.match(psHelp.stdout, /Usage: cs-agent-mcp agents top\|ps/);
+  await assert.rejects(fs.access(path.join(home, ".cs-agent-mcp", "mcp", "broker.json")), {
+    code: "ENOENT",
+  });
 });
 
 test("cs-agent-mcp agents top rejects redirected terminals without ANSI output", async (t) => {
@@ -621,6 +637,7 @@ test("cs-agent-mcp exits and releases its workspace lock when stdin disconnects"
     });
 
     assert.equal(exitCode, 0, stderr);
+    await waitForNoWorkspaceLocks(home);
     await assert.rejects(fs.access(lockPath), { code: "ENOENT" });
   }
 });
@@ -838,6 +855,7 @@ test("a dormant managed agent loads the same ACP session after MCP process resta
     arguments: { turnId: firstReceipt.receipt.turnId, waitMs: 30_000 },
   });
   await firstClient.close();
+  await waitForNoWorkspaceLocks(home);
 
   const secondClient = await startClient("cs-agent-mcp-after-restart");
   t.after(async () => await secondClient.close());
@@ -951,6 +969,7 @@ test("restart recovery reports SESSION_RESUME_REQUIRED instead of creating a fre
     arguments: { turnId: firstReceipt.receipt.turnId, waitMs: 30_000 },
   });
   await firstClient.close();
+  await waitForNoWorkspaceLocks(home);
 
   const secondClient = await startClient("cs-agent-mcp-after-resume-failure");
   t.after(async () => await secondClient.close());
@@ -1014,6 +1033,7 @@ test("restart recovery refuses to replace a missing local persistent session rec
   const child = created.structuredContent as { agent?: { agentId?: string } };
   assert.ok(child.agent?.agentId);
   await firstClient.close();
+  await waitForNoWorkspaceLocks(home);
 
   const sessionDir = path.join(configDir, "sessions");
   const sessionFiles = (await fs.readdir(sessionDir)).filter((entry) => entry.endsWith(".json"));
@@ -1085,6 +1105,7 @@ test("a dormant persistent agent discards its original ACP session after restart
   const child = created.structuredContent as { agent?: { agentId?: string } };
   assert.ok(child.agent?.agentId);
   await firstClient.close();
+  await waitForNoWorkspaceLocks(home);
 
   const secondClient = await startClient("cs-agent-mcp-after-dormant-discard");
   t.after(async () => await secondClient.close());

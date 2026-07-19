@@ -232,6 +232,7 @@ export type AgentRuntimeAdapter = {
   startTurn(input: StartRuntimeTurnInput): RuntimeTurn;
   getStatus(agentId: string): Promise<AcpRuntimeStatus>;
   destroyAgent(agentId: string, options?: { discardSession?: boolean }): Promise<void>;
+  shutdown?(): Promise<void>;
 };
 
 export type CreateAgentInput = {

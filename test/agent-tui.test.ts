@@ -5,19 +5,17 @@ import terminalKit from "terminal-kit";
 import type {
   AgentDiagnostics,
   AgentDiagnosticSummary,
+  DiagnosticConversation,
   DiagnosticTimelineItem,
   DiagnosticWarning,
 } from "../src/mcp/diagnostics/index.js";
 import { runAgentsTop } from "../src/mcp/diagnostics/tui/index.js";
-import {
-  appendTimelineItem,
-  MAX_TIMELINE_ITEMS,
-  scrollAttach,
-} from "../src/mcp/diagnostics/tui/model.js";
+import { scrollAttach } from "../src/mcp/diagnostics/tui/model.js";
 import { renderTop } from "../src/mcp/diagnostics/tui/render.js";
 import { sanitizeTerminalText } from "../src/mcp/diagnostics/tui/sanitize.js";
 import type {
   AgentsTopState,
+  AttachViewState,
   TerminalEvent,
   TopFrame,
   TopTerminal,
@@ -39,32 +37,9 @@ test("sanitizeTerminalText removes terminal controls while preserving visible wi
   assert.equal(terminalKit.stringWidth(sanitized), 19);
 });
 
-test("appendTimelineItem keeps a bounded timeline and preserves a paused viewport", () => {
-  let attach = {
-    agent: diagnosticAgent("managed-1"),
-    items: [] as DiagnosticTimelineItem[],
-    scrollOffset: 0,
-    unreadCount: 0,
-    trimmedCount: 0,
-  };
-  for (let index = 0; index < MAX_TIMELINE_ITEMS; index += 1) {
-    attach = appendTimelineItem(attach, timelineEvent(String(index), `event-${index}`));
-  }
-  attach.scrollOffset = 5;
-  attach = appendTimelineItem(attach, timelineEvent("next", "latest"));
-
-  assert.equal(attach.items.length, MAX_TIMELINE_ITEMS);
-  assert.equal(attach.trimmedCount, 1);
-  assert.equal(attach.unreadCount, 1);
-  assert.equal(attach.scrollOffset, 5);
-  assert.equal(attach.items.at(-1)?.kind, "event");
-});
-
-test("scrollAttach keeps a full viewport when moving to the oldest events", () => {
-  const items = Array.from({ length: 30 }, (_, index) =>
-    timelineEvent(String(index), `event-${index}`),
-  );
-  const attach = {
+test("scrollAttach keeps a full viewport when moving to the oldest conversation lines", () => {
+  const items = conversationLines(30).items;
+  const attach: AttachViewState = {
     agent: diagnosticAgent("managed-1"),
     items,
     scrollOffset: 0,
@@ -79,8 +54,8 @@ test("scrollAttach keeps a full viewport when moving to the oldest events", () =
   state.mode = "attach";
   state.attach = { ...oldestPage, scrollOffset: items.length - 1 };
   const text = frameText(renderTop(state, 90, 15, new FakeTerminal()));
-  assert.match(text, /event-0/);
-  assert.match(text, /event-9/);
+  assert.match(text, /line-0/);
+  assert.match(text, /line-9/);
 });
 
 test("runAgentsTop rejects redirected output without emitting terminal controls", async () => {
@@ -116,13 +91,14 @@ test("Agent Top handles root, mouse selection, attach follow, filter editing, an
   const root = diagnosticAgent("root-1", { kind: "root", name: "root" });
   const managed = diagnosticAgent("managed-1", { name: "worker" });
   diagnostics.enqueueList({ agents: [root, managed], warnings: [] });
-  const running = runAgentsTop({ diagnostics, terminal, refreshMs: 60_000 });
+  const running = runAgentsTop({ diagnostics, terminal, refreshMs: 20 });
   await waitFor(() => frameText(terminal.lastFrame).includes("worker"));
 
   terminal.emit({ type: "key", name: "ENTER" });
   await waitFor(() => frameText(terminal.lastFrame).includes("MCP caller identities"));
   assert.equal(diagnostics.attachCalls, 0);
 
+  diagnostics.conversation = conversationLines(8);
   const managedRow = findAgentRow(terminal.lastFrame, managed.agentId);
   terminal.emit({ type: "mouse", name: "MOUSE_LEFT_BUTTON_PRESSED", x: 2, y: managedRow });
   terminal.emit({ type: "mouse", name: "MOUSE_WHEEL_UP", x: 2, y: managedRow });
@@ -135,12 +111,9 @@ test("Agent Top handles root, mouse selection, attach follow, filter editing, an
     kind: "snapshot",
     agent: { ...managed, activeTurn: undefined },
   });
-  for (let index = 1; index <= 8; index += 1) {
-    diagnostics.feed.push(timelineEvent(String(index), `output-${index}`));
-  }
-  await waitFor(() => frameText(terminal.lastFrame).includes("output-8"));
+  await waitFor(() => frameText(terminal.lastFrame).includes("line-7"));
   terminal.emit({ type: "key", name: "UP" });
-  diagnostics.feed.push(timelineEvent("9", "new output"));
+  diagnostics.conversation = conversationLines(9);
   await waitFor(() => frameText(terminal.lastFrame).includes("PAUSED | 1 new"));
   terminal.emit({ type: "key", name: "END" });
   await waitFor(() => frameText(terminal.lastFrame).includes("LIVE"));
@@ -156,6 +129,233 @@ test("Agent Top handles root, mouse selection, attach follow, filter editing, an
   assert.equal(terminal.startCount, 1);
   assert.equal(terminal.stopCount, 1);
   assert.equal(diagnostics.feed.aborted, true);
+});
+
+test("Agent Top Attach renders the managed session conversation", async () => {
+  const terminal = new FakeTerminal();
+  const diagnostics = new FakeDiagnostics();
+  diagnostics.enqueueList({
+    agents: [diagnosticAgent("managed-1", { name: "worker" })],
+    warnings: [],
+  });
+  diagnostics.conversation = {
+    schema: "cs-agent-mcp.diagnostics.v1",
+    updatedAt: TIMESTAMP,
+    items: [
+      { kind: "user", text: "Inspect the workspace and explain the failure." },
+      { kind: "assistant", text: "I found the failing ownership check." },
+    ],
+  };
+
+  const running = runAgentsTop({ diagnostics, terminal, refreshMs: 60_000 });
+  await waitFor(() => frameText(terminal.lastFrame).includes("worker"));
+  terminal.emit({ type: "key", name: "ENTER" });
+
+  await waitFor(() => frameText(terminal.lastFrame).includes("Inspect the workspace"));
+  assert.match(frameText(terminal.lastFrame), /YOU/);
+  assert.match(frameText(terminal.lastFrame), /AGENT/);
+  assert.match(frameText(terminal.lastFrame), /failing ownership check/);
+
+  terminal.emit({ type: "key", name: "q" });
+  assert.equal(await running, 0);
+});
+
+test("Agent Top Attach renders thinking and tool call details", () => {
+  const state = baseState([]);
+  state.mode = "attach";
+  state.attach = {
+    agent: diagnosticAgent("managed-1"),
+    items: [
+      { kind: "thinking", text: "I should inspect the ownership record." },
+      { kind: "tool_call", name: "Read", toolCallId: "tool-1", input: '{"path":"lock.json"}' },
+      {
+        kind: "tool_result",
+        name: "Read",
+        toolCallId: "tool-1",
+        text: '{"owner":"root-1"}',
+        isError: false,
+      },
+    ],
+    scrollOffset: 0,
+    unreadCount: 0,
+    trimmedCount: 0,
+  };
+
+  const text = frameText(renderTop(state, 100, 16, new FakeTerminal()));
+  assert.match(text, /THINKING.*ownership record/);
+  assert.match(text, /TOOL.*Read.*lock\.json/);
+  assert.match(text, /RESULT.*Read.*root-1/);
+});
+
+test("Agent Top Attach keeps tool content visible when the tool name is long", () => {
+  const terminal = new FakeTerminal();
+  const state = baseState([]);
+  state.mode = "attach";
+  state.attach = {
+    agent: diagnosticAgent("managed-1"),
+    items: [
+      {
+        kind: "tool_call",
+        name: `tool-${"x".repeat(90)}`,
+        toolCallId: "tool-1",
+        input: "VISIBLE-INPUT",
+      },
+      {
+        kind: "tool_result",
+        name: `tool-${"y".repeat(90)}`,
+        toolCallId: "tool-1",
+        text: "VISIBLE-RESULT",
+        isError: false,
+      },
+    ],
+    scrollOffset: 0,
+    unreadCount: 0,
+    trimmedCount: 0,
+  };
+
+  const frame = renderTop(state, 72, 16, terminal);
+  const text = frameText(frame);
+  assert.match(text, /VISIBLE-INPUT/);
+  assert.match(text, /VISIBLE-RESULT/);
+  assert.equal(
+    frame.lines.every(
+      (line) => terminal.measure(line.map((segment) => segment.text).join("")) <= 72,
+    ),
+    true,
+  );
+});
+
+test("Agent Top Attach never renders redacted thinking payloads", () => {
+  const state = baseState([]);
+  state.mode = "attach";
+  state.attach = {
+    agent: diagnosticAgent("managed-1"),
+    items: [{ kind: "thinking", redacted: true }],
+    scrollOffset: 0,
+    unreadCount: 0,
+    trimmedCount: 0,
+  };
+
+  const text = frameText(renderTop(state, 100, 16, new FakeTerminal()));
+  assert.match(text, /\[redacted_thinking\]/);
+  assert.doesNotMatch(text, /PRIVATE-REASONING-PAYLOAD/);
+});
+
+test("Agent Top Attach wraps complete multiline conversation content", () => {
+  const state = baseState([]);
+  state.mode = "attach";
+  state.attach = {
+    agent: diagnosticAgent("managed-1"),
+    items: [
+      {
+        kind: "assistant",
+        text: [
+          "First paragraph explains the ownership conflict in enough detail to exceed one terminal row.",
+          "Second paragraph preserves the final evidence: TAIL-MARKER.",
+        ].join("\n"),
+      },
+    ],
+    scrollOffset: 0,
+    unreadCount: 0,
+    trimmedCount: 0,
+  };
+
+  const text = frameText(renderTop(state, 72, 16, new FakeTerminal()));
+  assert.match(text, /First paragraph/);
+  assert.match(text, /Second paragraph/);
+  assert.match(text, /TAIL-MARKER/);
+});
+
+test("Agent Top Attach preserves a paused conversation while new lines arrive", async () => {
+  const terminal = new FakeTerminal();
+  terminal.height = 12;
+  const diagnostics = new FakeDiagnostics();
+  diagnostics.enqueueList({ agents: [diagnosticAgent("managed-1")], warnings: [] });
+  diagnostics.conversation = conversationLines(12);
+
+  const running = runAgentsTop({ diagnostics, terminal, refreshMs: 20 });
+  await waitFor(() => frameText(terminal.lastFrame).includes("managed 1"));
+  terminal.emit({ type: "key", name: "ENTER" });
+  await waitFor(() => frameText(terminal.lastFrame).includes("line-11"));
+  terminal.emit({ type: "key", name: "UP" });
+  await waitFor(() => frameText(terminal.lastFrame).includes("PAUSED"));
+
+  diagnostics.conversation = conversationLines(13);
+  await waitFor(() => frameText(terminal.lastFrame).includes("PAUSED | 1 new"));
+  assert.doesNotMatch(frameText(terminal.lastFrame), /line-12/);
+
+  terminal.emit({ type: "key", name: "END" });
+  await waitFor(() => frameText(terminal.lastFrame).includes("line-12"));
+  assert.match(frameText(terminal.lastFrame), /LIVE/);
+  terminal.emit({ type: "key", name: "q" });
+  assert.equal(await running, 0);
+});
+
+test("Agent Top Attach keeps facade events out of the conversation viewport", async () => {
+  const terminal = new FakeTerminal();
+  terminal.height = 12;
+  const diagnostics = new FakeDiagnostics();
+  diagnostics.enqueueList({ agents: [diagnosticAgent("managed-1")], warnings: [] });
+  diagnostics.conversation = conversationLines(12);
+
+  const running = runAgentsTop({ diagnostics, terminal, refreshMs: 60_000 });
+  await waitFor(() => frameText(terminal.lastFrame).includes("managed 1"));
+  terminal.emit({ type: "key", name: "ENTER" });
+  await waitFor(() => frameText(terminal.lastFrame).includes("line-11"));
+  terminal.emit({ type: "key", name: "UP" });
+  diagnostics.feed.push(timelineEvent("99", "SHOULD-NOT-APPEAR"));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  assert.doesNotMatch(frameText(terminal.lastFrame), /SHOULD-NOT-APPEAR/);
+  assert.match(frameText(terminal.lastFrame), /PAUSED \| 0 new/);
+  terminal.emit({ type: "key", name: "q" });
+  assert.equal(await running, 0);
+});
+
+test("Agent Top Attach coalesces slow conversation refreshes", async () => {
+  const terminal = new FakeTerminal();
+  const diagnostics = new FakeDiagnostics();
+  diagnostics.enqueueList({ agents: [diagnosticAgent("managed-1")], warnings: [] });
+  diagnostics.conversation = conversationLines(1);
+  diagnostics.conversationDelayMs = 40;
+
+  const running = runAgentsTop({ diagnostics, terminal, refreshMs: 10 });
+  await waitFor(() => frameText(terminal.lastFrame).includes("managed 1"));
+  terminal.emit({ type: "key", name: "ENTER" });
+  await new Promise((resolve) => setTimeout(resolve, 90));
+  const text = frameText(terminal.lastFrame);
+  terminal.emit({ type: "key", name: "q" });
+  assert.equal(await running, 0);
+
+  assert.match(text, /line-0/);
+  assert.equal(diagnostics.maxConcurrentConversationReads, 1);
+});
+
+test("Agent Top restores the terminal before a pending conversation read finishes", async () => {
+  const terminal = new FakeTerminal();
+  const diagnostics = new FakeDiagnostics();
+  const readGate = new Deferred<void>();
+  diagnostics.enqueueList({ agents: [diagnosticAgent("managed-1")], warnings: [] });
+  diagnostics.conversation = conversationLines(1);
+  diagnostics.conversationGate = readGate;
+
+  let completed = false;
+  const running = runAgentsTop({ diagnostics, terminal, refreshMs: 60_000 }).then((code) => {
+    completed = true;
+    return code;
+  });
+  await waitFor(() => frameText(terminal.lastFrame).includes("managed 1"));
+  terminal.emit({ type: "key", name: "ENTER" });
+  await waitFor(() => diagnostics.concurrentConversationReads === 1);
+  terminal.emit({ type: "key", name: "q" });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  const stopCountBeforeRead = terminal.stopCount;
+  const completedBeforeRead = completed;
+  readGate.resolve();
+  assert.equal(stopCountBeforeRead, 1);
+  assert.equal(completedBeforeRead, true);
+  assert.equal(await running, 0);
 });
 
 test("Agent Top retains stale instance rows and discards outdated includeAll results", async () => {
@@ -288,6 +488,11 @@ class FakeTerminal implements TopTerminal {
 
 class FakeDiagnostics implements AgentDiagnostics {
   readonly feed = new TimelineFeed();
+  conversation?: DiagnosticConversation;
+  conversationDelayMs = 0;
+  conversationGate?: Deferred<void>;
+  concurrentConversationReads = 0;
+  maxConcurrentConversationReads = 0;
   listCalls = 0;
   attachCalls = 0;
   private readonly listQueue: Array<
@@ -318,6 +523,23 @@ class FakeDiagnostics implements AgentDiagnostics {
 
   async resolveAgent(): Promise<never> {
     throw new Error("not used");
+  }
+
+  async readConversation(): Promise<DiagnosticConversation | undefined> {
+    this.concurrentConversationReads += 1;
+    this.maxConcurrentConversationReads = Math.max(
+      this.maxConcurrentConversationReads,
+      this.concurrentConversationReads,
+    );
+    try {
+      if (this.conversationDelayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, this.conversationDelayMs));
+      }
+      await this.conversationGate?.promise;
+      return this.conversation;
+    } finally {
+      this.concurrentConversationReads -= 1;
+    }
   }
 
   attachAgent(
@@ -420,6 +642,17 @@ function timelineEvent(cursor: string, summary: string): DiagnosticTimelineItem 
       truncated: false,
       detail: { stream: "output", text: summary },
     },
+  };
+}
+
+function conversationLines(count: number): DiagnosticConversation {
+  return {
+    schema: "cs-agent-mcp.diagnostics.v1",
+    updatedAt: TIMESTAMP,
+    items: Array.from({ length: count }, (_, index) => ({
+      kind: "assistant" as const,
+      text: `line-${index}`,
+    })),
   };
 }
 
