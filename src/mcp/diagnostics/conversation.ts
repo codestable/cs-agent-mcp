@@ -3,7 +3,7 @@ import type { SessionRecord, SessionToolResult } from "../../types.js";
 export type DiagnosticConversationItem =
   | { kind: "user"; text: string }
   | { kind: "assistant"; text: string }
-  | { kind: "resume" }
+  | { kind: "resume"; label?: "resumed" | "next task" }
   | { kind: "thinking"; text: string; redacted?: false }
   | { kind: "thinking"; redacted: true }
   | { kind: "tool_call"; toolCallId: string; name: string; input: string }
@@ -39,6 +39,29 @@ export function projectConversation(record: SessionRecord): DiagnosticConversati
     schema: "cs-agent-mcp.diagnostics.v1",
     updatedAt: record.updated_at,
     ...(record.title ? { title: record.title } : {}),
+    items,
+  };
+}
+
+export function projectConversations(records: SessionRecord[]): DiagnosticConversation {
+  const ordered = records.toSorted(
+    (left, right) =>
+      left.createdAt.localeCompare(right.createdAt) ||
+      left.acpxRecordId.localeCompare(right.acpxRecordId),
+  );
+  const projected = ordered.map(projectConversation);
+  const latest = projected.at(-1);
+  const items: DiagnosticConversationItem[] = [];
+  for (const conversation of projected) {
+    if (items.length > 0) {
+      items.push({ kind: "resume", label: "next task" });
+    }
+    items.push(...conversation.items);
+  }
+  return {
+    schema: "cs-agent-mcp.diagnostics.v1",
+    updatedAt: latest?.updatedAt ?? new Date(0).toISOString(),
+    ...(latest?.title ? { title: latest.title } : {}),
     items,
   };
 }

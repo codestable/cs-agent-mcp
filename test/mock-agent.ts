@@ -2,6 +2,7 @@
 
 import { randomUUID } from "node:crypto";
 import { writeFileSync } from "node:fs";
+import { access } from "node:fs/promises";
 import path from "node:path";
 import { Readable, Writable } from "node:stream";
 import {
@@ -1323,6 +1324,27 @@ class MockAgent implements Agent {
     }
     if (text === "retryable-error-once") {
       return "recovered after retry";
+    }
+
+    if (text.startsWith("file-barrier ")) {
+      const input = JSON.parse(text.slice("file-barrier ".length)) as {
+        path?: unknown;
+        result?: unknown;
+      };
+      if (typeof input.path !== "string" || typeof input.result !== "string") {
+        throw new Error('Usage: file-barrier {"path":"...","result":"..."}');
+      }
+      while (true) {
+        try {
+          await access(input.path);
+          return input.result;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+            throw error;
+          }
+          await sleepWithCancel(20, signal);
+        }
+      }
     }
 
     if (text.startsWith("extension-notification ")) {

@@ -185,11 +185,13 @@ try {
   const terminalOutput = await fs.readFile(rawLog);
   assertBufferIncludes(terminalOutput, "__TTY_RESTORED__:0:0", "cooked terminal state");
   assertBufferIncludes(terminalOutput, "zzz-worker | claude | idle", "managed Attach view");
-  assertBufferIncludes(terminalOutput, "YOU    Inspect the workspace lock.", "user message");
-  assertBufferIncludes(terminalOutput, "THINKING", "agent thinking");
-  assertBufferIncludes(terminalOutput, "TOOL   Read", "tool call");
-  assertBufferIncludes(terminalOutput, "AGENT  The owner remains root-e2e", "agent message");
-  assertBufferIncludes(terminalOutput, "RESULT Read", "tool result");
+  assertBufferIncludes(terminalOutput, "[USER]", "user message label");
+  assertBufferIncludes(terminalOutput, "Inspect the workspace lock.", "user message");
+  assertBufferIncludes(terminalOutput, "[THINKING]", "agent thinking");
+  assertBufferIncludes(terminalOutput, "[TOOL CALL] Read", "tool call");
+  assertBufferIncludes(terminalOutput, "[ASSISTANT]", "agent message label");
+  assertBufferIncludes(terminalOutput, "The owner remains root-e2e", "agent message");
+  assertBufferIncludes(terminalOutput, "[TOOL RESULT] Read", "tool result");
   assertBufferIncludes(terminalOutput, "CONVERSATION-TAIL", "wrapped conversation tail");
   assertBufferIncludes(terminalOutput, "Terminal too small", "resize state");
   assertBufferIncludes(terminalOutput, "\u001b[?1049h", "alternate screen enable");
@@ -243,10 +245,11 @@ send -- "\\033\\[<0;2;5M"
 send -- "\\033\\[<0;2;5m"
 send -- "\\r"
 wait_for "zzz-worker | claude | idle" "managed Attach view"
-wait_for "YOU    Inspect the workspace lock." "Attach user message"
-wait_for "TOOL   Read" "Attach tool call"
+wait_for "\\[USER\\]" "Attach user message label"
+wait_for "Inspect the workspace lock." "Attach user message"
+wait_for "\\[TOOL CALL\\] Read" "Attach tool call"
 wait_for "CONVERSATION-TAIL" "Attach wrapped message"
-wait_for "RESULT Read" "Attach tool result"
+wait_for "\\[TOOL RESULT\\] Read" "Attach tool result"
 send -- "\\033"
 wait_for "managed 1" "list after Esc"
 exec stty -f $spawn_out(slave,name) rows 8 columns 40

@@ -1,0 +1,70 @@
+{
+  "gate_id": "scope-gate",
+  "stage": "implementation",
+  "status": "passed",
+  "blocking": [],
+  "warnings": [],
+  "evidence": [
+    {
+      "changed_files": [
+        ".github/workflows/ci.yml",
+        ".github/workflows/release.yml",
+        "AGENTS.md",
+        "CHANGELOG.md",
+        "README.md",
+        "docs/MCP_ARCHITECTURE.md",
+        "package.json",
+        "scripts/package-smoke.mjs",
+        "src/mcp/facade/facade.ts",
+        "src/mcp/facade/types.ts",
+        "src/mcp/transport/server.ts",
+        "test/mcp-cli.test.ts",
+        "test/mcp-e2e.test.ts",
+        "test/mcp-facade.test.ts",
+        "test/mock-agent.ts",
+        ".codestable/features/2026-07-19-agent-wait-many/agent-wait-many-checklist.yaml",
+        ".codestable/features/2026-07-19-agent-wait-many/agent-wait-many-design-review.md",
+        ".codestable/features/2026-07-19-agent-wait-many/agent-wait-many-design.md",
+        ".codestable/features/2026-07-19-agent-wait-many/agent-wait-many-implementation-evidence.md",
+        ".codestable/features/2026-07-19-agent-wait-many/agent-wait-many-review.md",
+        ".codestable/features/2026-07-19-agent-wait-many/goal-plan.md",
+        ".codestable/features/2026-07-19-agent-wait-many/goal-protocol.md",
+        ".codestable/features/2026-07-19-agent-wait-many/goal-state.yaml",
+        ".codestable/features/2026-07-19-agent-wait-many/implementation-dod-gate.json",
+        ".codestable/features/2026-07-19-agent-wait-many/implementation-evidence-pack.json",
+        ".codestable/features/2026-07-19-agent-wait-many/implementation-evidence-pack.md",
+        ".codestable/features/2026-07-19-agent-wait-many/implementation-scope-gate.json",
+        "scripts/package-command-spawn.mjs",
+        "scripts/package-smoke-tarball.mjs",
+        "src/mcp/facade/wait-many.ts",
+        "test/package-spawn.test.mjs"
+      ],
+      "ignored_machine_artifacts": [
+        ".codestable/features/2026-07-19-agent-wait-many/implementation-dod-results.json"
+      ],
+      "allowed_prefixes": [
+        ".codestable/features/2026-07-19-agent-wait-many",
+        ".github/workflows/ci.yml",
+        ".github/workflows/release.yml",
+        "AGENTS.md",
+        "CHANGELOG.md",
+        "README.md",
+        "docs/MCP_ARCHITECTURE.md",
+        "package.json",
+        "scripts/package-smoke.mjs",
+        "scripts/package-smoke-tarball.mjs",
+        "scripts/package-command-spawn.mjs",
+        "src/mcp/facade/facade.ts",
+        "src/mcp/facade/types.ts",
+        "src/mcp/facade/wait-many.ts",
+        "src/mcp/transport/server.ts",
+        "test/mcp-cli.test.ts",
+        "test/mcp-e2e.test.ts",
+        "test/mcp-facade.test.ts",
+        "test/mock-agent.ts",
+        "test/package-spawn.test.mjs"
+      ]
+    }
+  ],
+  "providers": {}
+}

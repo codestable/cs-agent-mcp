@@ -558,7 +558,7 @@ test("cs-agent-mcp serves the facade over stdio", async (t) => {
   await client.connect(transport);
   const tools = await client.listTools();
 
-  assert.equal(tools.tools.length, 13);
+  assert.equal(tools.tools.length, 14);
   assert.equal(tools.tools[0]?.name, "cs_agent_capabilities");
   const createTool = tools.tools.find((tool) => tool.name === "cs_agent_create");
   const createSchema = createTool?.inputSchema as {
@@ -573,6 +573,19 @@ test("cs-agent-mcp serves the facade over stdio", async (t) => {
   assert.match(maxTurnsDescription, /agentic turns/);
   assert.match(maxTurnsDescription, /8-12/);
   assert.match(maxTurnsDescription, /omit/);
+  const waitManyTool = tools.tools.find((tool) => tool.name === "cs_agent_wait_many");
+  const waitManySchema = waitManyTool?.inputSchema as {
+    properties?: {
+      turnIds?: { minItems?: number; maxItems?: number };
+      mode?: { enum?: string[]; default?: string };
+      waitMs?: { maximum?: number };
+    };
+  };
+  assert.equal(waitManySchema.properties?.turnIds?.minItems, 1);
+  assert.equal(waitManySchema.properties?.turnIds?.maxItems, 64);
+  assert.deepEqual(waitManySchema.properties?.mode?.enum, ["any", "all"]);
+  assert.equal(waitManySchema.properties?.mode?.default, "any");
+  assert.equal(waitManySchema.properties?.waitMs?.maximum, 30_000);
 });
 
 test("cs-agent-mcp exits and releases its workspace lock when stdin disconnects", async (t) => {

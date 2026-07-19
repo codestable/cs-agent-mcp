@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -15,6 +16,7 @@ import type {
   EnsureRuntimeAgentInput,
   FacadeActor,
   FacadeLimits,
+  FacadeStore,
   RuntimeAgentHooks,
   RuntimeTurn,
   StartRuntimeTurnInput,
@@ -99,6 +101,25 @@ class MaxTurnsFailedAgentRuntime extends FakeAgentRuntime {
           detailCode: "MAX_TURNS_EXCEEDED",
           message: "The agent reached its configured sessionOptions.maxTurns",
           retryable: false,
+        },
+      }),
+      cancel: async () => {},
+    };
+  }
+}
+
+class PartialTimeoutAgentRuntime extends FakeAgentRuntime {
+  override startTurn(input: StartRuntimeTurnInput): RuntimeTurn {
+    this.started.push(input);
+    return {
+      events: (async function* (): AsyncIterable<AcpRuntimeEvent> {
+        yield { type: "text_delta", text: "partial review", stream: "output" };
+      })(),
+      result: Promise.resolve({
+        status: "failed",
+        error: {
+          code: "TIMEOUT",
+          message: "Timed out before the prompt completed",
         },
       }),
       cancel: async () => {},
@@ -272,8 +293,8 @@ function createHarness(
   runtime = new FakeAgentRuntime(),
   limits?: Partial<FacadeLimits>,
   allowedCwdRoots = [TEST_WORKSPACE],
+  store: FacadeStore = createInMemoryFacadeStore(),
 ) {
-  const store = createInMemoryFacadeStore();
   const identity = createFacadeIdentityIssuer({ store });
   const facade = new MultiAgentFacade({
     store,
@@ -674,6 +695,286 @@ test("MultiAgentFacade sends one idempotent message and records its terminal rep
   );
 });
 
+test("MultiAgentFacade does not apply the send acceptance timeout to task completion", async () => {
+  const { facade, runtime } = createHarness();
+  const root = await facade.bootstrapRoot({ agent: "codex", cwd: TEST_WORKSPACE });
+  const actor: FacadeActor = { rootExecutionId: root.rootExecutionId, agentId: root.agentId };
+  const child = await facade.createAgent({ agent: "claude" }, actor);
+
+  const receipt = await facade.send(
+    {
+      agentId: child.agentId,
+      content: "complete the full review",
+      idempotencyKey: "acceptance-timeout-only",
+      timeoutMs: 25,
+    },
+    actor,
+  );
+  const retried = await facade.send(
+    {
+      agentId: child.agentId,
+      content: "complete the full review",
+      idempotencyKey: "acceptance-timeout-only",
+      timeoutMs: 50,
+    },
+    actor,
+  );
+  const turn = await waitForTerminalTurn(facade, actor, receipt.turnId);
+
+  assert.deepEqual(retried, receipt);
+  assert.equal(turn.state, "completed");
+  assert.equal(turn.timeoutMs, undefined);
+  assert.equal(runtime.started[0]?.timeoutMs, undefined);
+});
+
+test("MultiAgentFacade reuses and migrates a legacy timeout fingerprint", async () => {
+  const { facade, runtime, store } = createHarness();
+  const root = await facade.bootstrapRoot({ agent: "codex", cwd: TEST_WORKSPACE });
+  const actor: FacadeActor = { rootExecutionId: root.rootExecutionId, agentId: root.agentId };
+  const child = await facade.createAgent({ agent: "claude" }, actor);
+  const input = {
+    agentId: child.agentId,
+    content: "complete the full review",
+    idempotencyKey: "legacy-timeout-fingerprint",
+    timeoutMs: 25,
+  };
+  const receipt = await facade.send(input, actor);
+  const idempotencyId = `${actor.agentId}:${input.idempotencyKey}`;
+  const legacyFingerprint = createHash("sha256")
+    .update(
+      JSON.stringify({
+        agentId: input.agentId,
+        content: input.content,
+        attachments: [],
+        timeoutMs: input.timeoutMs,
+      }),
+    )
+    .digest("hex");
+  const currentFingerprint = createHash("sha256")
+    .update(
+      JSON.stringify({
+        agentId: input.agentId,
+        content: input.content,
+        attachments: [],
+      }),
+    )
+    .digest("hex");
+  await store.update((snapshot) => {
+    const existing = snapshot.idempotency[idempotencyId];
+    const turn = snapshot.turns[receipt.turnId];
+    assert.ok(existing);
+    assert.ok(turn);
+    existing.fingerprint = legacyFingerprint;
+    turn.timeoutMs = input.timeoutMs;
+  });
+
+  await assert.rejects(
+    facade.send({ ...input, content: "different review", timeoutMs: 50 }, actor),
+    { code: "IDEMPOTENCY_CONFLICT" },
+  );
+
+  const retried = await facade.send({ ...input, timeoutMs: 50 }, actor);
+  const migratedFingerprint = await store.read(
+    (snapshot) => snapshot.idempotency[idempotencyId]?.fingerprint,
+  );
+  await waitForTerminalTurn(facade, actor, receipt.turnId);
+
+  assert.deepEqual(retried, receipt);
+  assert.equal(migratedFingerprint, currentFingerprint);
+  assert.equal(runtime.started.length, 1);
+});
+
+test("MultiAgentFacade rejects malformed legacy timeout fingerprint linkage", async () => {
+  const { facade, store } = createHarness();
+  const root = await facade.bootstrapRoot({ agent: "codex", cwd: TEST_WORKSPACE });
+  const actor: FacadeActor = { rootExecutionId: root.rootExecutionId, agentId: root.agentId };
+  const child = await facade.createAgent({ agent: "claude" }, actor);
+  const input = {
+    agentId: child.agentId,
+    content: "complete the full review",
+    idempotencyKey: "malformed-legacy-timeout-fingerprint",
+    timeoutMs: 25,
+  };
+  const receipt = await facade.send(input, actor);
+  await waitForTerminalTurn(facade, actor, receipt.turnId);
+  const idempotencyId = `${actor.agentId}:${input.idempotencyKey}`;
+
+  for (const malformedTimeoutMs of [null, "25", { value: 25 }, 0, -1, 1.5, 86_400_001]) {
+    const malformedFingerprint = createHash("sha256")
+      .update(
+        JSON.stringify({
+          agentId: input.agentId,
+          content: input.content,
+          attachments: [],
+          timeoutMs: malformedTimeoutMs,
+        }),
+      )
+      .digest("hex");
+    await store.update((snapshot) => {
+      const existing = snapshot.idempotency[idempotencyId];
+      const turn = snapshot.turns[receipt.turnId];
+      assert.ok(existing);
+      assert.ok(turn);
+      existing.fingerprint = malformedFingerprint;
+      turn.timeoutMs = malformedTimeoutMs as unknown as number;
+    });
+
+    await assert.rejects(facade.send({ ...input, timeoutMs: 50 }, actor), {
+      code: "IDEMPOTENCY_CONFLICT",
+    });
+  }
+
+  await store.update((snapshot) => {
+    const existing = snapshot.idempotency[idempotencyId];
+    const turn = snapshot.turns[receipt.turnId];
+    assert.ok(existing);
+    assert.ok(turn);
+    existing.fingerprint = createHash("sha256")
+      .update(
+        JSON.stringify({
+          agentId: input.agentId,
+          content: input.content,
+          attachments: [],
+          timeoutMs: input.timeoutMs,
+        }),
+      )
+      .digest("hex");
+    delete turn.timeoutMs;
+  });
+  await assert.rejects(facade.send({ ...input, timeoutMs: 50 }, actor), {
+    code: "IDEMPOTENCY_CONFLICT",
+  });
+});
+
+test("MultiAgentFacade rejects internally inconsistent legacy receipt records", async () => {
+  const { facade, store } = createHarness();
+  const root = await facade.bootstrapRoot({ agent: "codex", cwd: TEST_WORKSPACE });
+  const actor: FacadeActor = { rootExecutionId: root.rootExecutionId, agentId: root.agentId };
+  const child = await facade.createAgent({ agent: "claude" }, actor);
+  const input = {
+    agentId: child.agentId,
+    content: "complete the full review",
+    idempotencyKey: "inconsistent-legacy-receipt",
+    timeoutMs: 25,
+  };
+  const receipt = await facade.send(input, actor);
+  await waitForTerminalTurn(facade, actor, receipt.turnId);
+  const idempotencyId = `${actor.agentId}:${input.idempotencyKey}`;
+  const legacyFingerprint = createHash("sha256")
+    .update(
+      JSON.stringify({
+        agentId: input.agentId,
+        content: input.content,
+        attachments: [],
+        timeoutMs: input.timeoutMs,
+      }),
+    )
+    .digest("hex");
+
+  for (const corruptedRecord of ["turn", "message"] as const) {
+    await store.update((snapshot) => {
+      const existing = snapshot.idempotency[idempotencyId];
+      const turn = snapshot.turns[receipt.turnId];
+      const message = snapshot.messages[receipt.messageId];
+      assert.ok(existing);
+      assert.ok(turn);
+      assert.ok(message);
+      existing.fingerprint = legacyFingerprint;
+      turn.timeoutMs = input.timeoutMs;
+      turn.turnId =
+        corruptedRecord === "turn" ? "00000000-0000-4000-8000-000000000201" : receipt.turnId;
+      message.messageId =
+        corruptedRecord === "message" ? "00000000-0000-4000-8000-000000000202" : receipt.messageId;
+    });
+
+    await assert.rejects(facade.send({ ...input, timeoutMs: 50 }, actor), {
+      code: "IDEMPOTENCY_CONFLICT",
+    });
+  }
+});
+
+test("MultiAgentFacade rejects a legacy fingerprint linked to the wrong turn", async () => {
+  const { facade, store } = createHarness();
+  const root = await facade.bootstrapRoot({ agent: "codex", cwd: TEST_WORKSPACE });
+  const actor: FacadeActor = { rootExecutionId: root.rootExecutionId, agentId: root.agentId };
+  const expectedTarget = await facade.createAgent({ agent: "claude" }, actor);
+  const wrongTarget = await facade.createAgent({ agent: "codex" }, actor);
+  const input = {
+    agentId: expectedTarget.agentId,
+    content: "complete the full review",
+    idempotencyKey: "wrong-legacy-turn-linkage",
+    timeoutMs: 25,
+  };
+  const receipt = await facade.send(input, actor);
+  const wrongReceipt = await facade.send(
+    {
+      agentId: wrongTarget.agentId,
+      content: "unrelated task",
+      idempotencyKey: "wrong-legacy-turn-source",
+    },
+    actor,
+  );
+  await Promise.all([
+    waitForTerminalTurn(facade, actor, receipt.turnId),
+    waitForTerminalTurn(facade, actor, wrongReceipt.turnId),
+  ]);
+  const idempotencyId = `${actor.agentId}:${input.idempotencyKey}`;
+  const legacyFingerprint = createHash("sha256")
+    .update(
+      JSON.stringify({
+        agentId: input.agentId,
+        content: input.content,
+        attachments: [],
+        timeoutMs: input.timeoutMs,
+      }),
+    )
+    .digest("hex");
+  await store.update((snapshot) => {
+    const existing = snapshot.idempotency[idempotencyId];
+    const wrongTurn = snapshot.turns[wrongReceipt.turnId];
+    assert.ok(existing);
+    assert.ok(wrongTurn);
+    existing.fingerprint = legacyFingerprint;
+    existing.receipt = wrongReceipt;
+    wrongTurn.timeoutMs = input.timeoutMs;
+  });
+
+  await assert.rejects(facade.send({ ...input, timeoutMs: 50 }, actor), {
+    code: "IDEMPOTENCY_CONFLICT",
+  });
+});
+
+test("MultiAgentFacade retains partial timeout events without creating a final message", async () => {
+  const { facade } = createHarness(new PartialTimeoutAgentRuntime());
+  const root = await facade.bootstrapRoot({ agent: "codex", cwd: TEST_WORKSPACE });
+  const actor: FacadeActor = { rootExecutionId: root.rootExecutionId, agentId: root.agentId };
+  const child = await facade.createAgent({ agent: "claude" }, actor);
+
+  const receipt = await facade.send(
+    {
+      agentId: child.agentId,
+      content: "complete the full review",
+      idempotencyKey: "partial-timeout",
+    },
+    actor,
+  );
+  const result = await facade.waitMessage({ turnId: receipt.turnId, waitMs: 1_000 }, actor);
+  const events = await facade.events({ turnId: receipt.turnId, afterCursor: "0" }, actor);
+
+  assert.equal(result.status, "terminal_without_message");
+  assert.equal(result.turn.state, "failed");
+  assert.equal(result.turn.error?.code, "TIMEOUT");
+  assert.equal(result.turn.resultMessageId, undefined);
+  assert.equal(
+    events.events.some(
+      (event) =>
+        event.type === "turn.text_delta" &&
+        (event.data as { text?: string }).text === "partial review",
+    ),
+    true,
+  );
+});
+
 test("MultiAgentFacade batches consecutive text deltas without losing output", async () => {
   const deltaCount = 1_000;
   const runtime = new BurstTextAgentRuntime(deltaCount);
@@ -851,6 +1152,405 @@ test("MultiAgentFacade runs turns for different agents concurrently", async () =
     waitForTerminalTurn(facade, actor, first.turnId),
     waitForTerminalTurn(facade, actor, second.turnId),
   ]);
+});
+
+test("MultiAgentFacade wait many projects mixed ready and pending turns in input order", async () => {
+  const runtime = new ControlledAgentRuntime();
+  const { facade, store } = createHarness(runtime);
+  const root = await facade.bootstrapRoot({ agent: "codex", cwd: TEST_WORKSPACE });
+  const actor: FacadeActor = { rootExecutionId: root.rootExecutionId, agentId: root.agentId };
+  const agents = await Promise.all(
+    ["claude", "codex", "pi", "openclaw"].map(
+      async (agent) => await facade.createAgent({ agent }, actor),
+    ),
+  );
+  const turns = await Promise.all(
+    agents.map(
+      async (agent, index) =>
+        await facade.send(
+          {
+            agentId: agent.agentId,
+            content: `wait-many-${index}`,
+            idempotencyKey: `wait-many-${index}`,
+          },
+          actor,
+        ),
+    ),
+  );
+  await waitForCondition(() => runtime.started.length === turns.length);
+
+  const messageId = "00000000-0000-4000-8000-000000000101";
+  const permissionId = "00000000-0000-4000-8000-000000000102";
+  await store.update((snapshot) => {
+    const messageTurn = snapshot.turns[turns[0].turnId];
+    messageTurn.state = "completed";
+    messageTurn.resultMessageId = messageId;
+    snapshot.messages[messageId] = {
+      messageId,
+      rootExecutionId: root.rootExecutionId,
+      direction: "outbound",
+      fromAgentId: messageTurn.agentId,
+      toAgentId: root.agentId,
+      turnId: messageTurn.turnId,
+      inReplyTo: messageTurn.inputMessageId,
+      content: "first ready",
+      createdAt: new Date().toISOString(),
+    };
+
+    snapshot.turns[turns[1].turnId].state = "failed";
+
+    const permissionTurn = snapshot.turns[turns[2].turnId];
+    permissionTurn.state = "waiting_permission";
+    permissionTurn.pendingPermissionId = permissionId;
+    snapshot.permissions[permissionId] = {
+      permissionId,
+      rootExecutionId: root.rootExecutionId,
+      agentId: permissionTurn.agentId,
+      turnId: permissionTurn.turnId,
+      state: "pending",
+      request: {
+        sessionId: permissionTurn.agentId,
+        raw: {
+          sessionId: permissionTurn.agentId,
+          toolCall: { toolCallId: "wait-many-write", title: "write file", kind: "edit" },
+          options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }],
+        },
+        inferredKind: "edit",
+      },
+      requestedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 30_000).toISOString(),
+    };
+  });
+
+  const result = await facade.waitMany(
+    {
+      turnIds: [
+        turns[3].turnId,
+        turns[0].turnId,
+        turns[1].turnId,
+        turns[2].turnId,
+        turns[0].turnId,
+      ],
+      mode: "any",
+    },
+    actor,
+  );
+
+  assert.deepEqual(
+    result.ready.map((item) => ({ status: item.status, turnId: item.turn.turnId })),
+    [
+      { status: "message", turnId: turns[0].turnId },
+      { status: "terminal_without_message", turnId: turns[1].turnId },
+      { status: "action_required", turnId: turns[2].turnId },
+    ],
+  );
+  assert.deepEqual(result.pendingTurnIds, [turns[3].turnId, turns[2].turnId]);
+  assert.equal(result.mode, "any");
+  assert.equal(result.timedOut, false);
+  assert.equal(Object.hasOwn(result, "retryAfterMs"), false);
+});
+
+test("MultiAgentFacade wait many validates raw batch length before deduplication", async () => {
+  const { facade } = createHarness();
+  const root = await facade.bootstrapRoot({ agent: "codex", cwd: TEST_WORKSPACE });
+  const actor: FacadeActor = { rootExecutionId: root.rootExecutionId, agentId: root.agentId };
+
+  await assert.rejects(facade.waitMany({ turnIds: [] }, actor), {
+    code: "INVALID_ARGUMENT",
+  });
+  await assert.rejects(
+    facade.waitMany(
+      { turnIds: Array.from({ length: 65 }, () => "00000000-0000-4000-8000-000000000103") },
+      actor,
+    ),
+    { code: "INVALID_ARGUMENT" },
+  );
+});
+
+test("MultiAgentFacade wait many fails the whole batch for unknown or sibling turns", async () => {
+  const runtime = new ControlledAgentRuntime();
+  const { facade } = createHarness(runtime);
+  const root = await facade.bootstrapRoot({ agent: "codex", cwd: TEST_WORKSPACE });
+  const rootActor: FacadeActor = {
+    rootExecutionId: root.rootExecutionId,
+    agentId: root.agentId,
+  };
+  const parent = await facade.createAgent({ agent: "claude" }, rootActor);
+  const sibling = await facade.createAgent({ agent: "pi" }, rootActor);
+  const parentActor: FacadeActor = {
+    rootExecutionId: parent.rootExecutionId,
+    agentId: parent.agentId,
+  };
+  const descendant = await facade.createAgent({ agent: "codex" }, parentActor);
+  const visibleTurn = await facade.send(
+    { agentId: descendant.agentId, content: "visible", idempotencyKey: "wait-many-visible" },
+    parentActor,
+  );
+  const siblingTurn = await facade.send(
+    { agentId: sibling.agentId, content: "sibling", idempotencyKey: "wait-many-sibling" },
+    rootActor,
+  );
+
+  await assert.rejects(
+    facade.waitMany(
+      {
+        turnIds: [visibleTurn.turnId, "00000000-0000-4000-8000-000000000104"],
+      },
+      parentActor,
+    ),
+    { code: "TURN_NOT_FOUND" },
+  );
+  await assert.rejects(
+    facade.waitMany({ turnIds: [visibleTurn.turnId, siblingTurn.turnId] }, parentActor),
+    { code: "UNAUTHORIZED" },
+  );
+});
+
+test("MultiAgentFacade wait many timeout returns pending without cancelling turns", async () => {
+  const runtime = new ControlledAgentRuntime();
+  const { facade } = createHarness(runtime);
+  const root = await facade.bootstrapRoot({ agent: "codex", cwd: TEST_WORKSPACE });
+  const actor: FacadeActor = { rootExecutionId: root.rootExecutionId, agentId: root.agentId };
+  const child = await facade.createAgent({ agent: "claude" }, actor);
+  const receipt = await facade.send(
+    { agentId: child.agentId, content: "keep running", idempotencyKey: "wait-many-timeout" },
+    actor,
+  );
+  await waitForCondition(() => runtime.started.length === 1);
+
+  const result = await facade.waitMany({ turnIds: [receipt.turnId], waitMs: 0 }, actor);
+
+  assert.deepEqual(result, {
+    mode: "any",
+    ready: [],
+    pendingTurnIds: [receipt.turnId],
+    timedOut: true,
+    retryAfterMs: 0,
+  });
+  assert.equal((await facade.getTurn({ turnId: receipt.turnId }, actor)).state, "running");
+  assert.deepEqual(runtime.cancellations, []);
+});
+
+test("MultiAgentFacade waitAll stays pending until every turn is terminal", async () => {
+  const runtime = new ControlledAgentRuntime();
+  const { facade } = createHarness(runtime);
+  const root = await facade.bootstrapRoot({ agent: "codex", cwd: TEST_WORKSPACE });
+  const actor: FacadeActor = { rootExecutionId: root.rootExecutionId, agentId: root.agentId };
+  const firstAgent = await facade.createAgent({ agent: "claude" }, actor);
+  const secondAgent = await facade.createAgent({ agent: "pi" }, actor);
+  const first = await facade.send(
+    { agentId: firstAgent.agentId, content: "first", idempotencyKey: "wait-all-first" },
+    actor,
+  );
+  const second = await facade.send(
+    { agentId: secondAgent.agentId, content: "second", idempotencyKey: "wait-all-second" },
+    actor,
+  );
+  await waitForCondition(() => runtime.started.length === 2);
+
+  let settled = false;
+  const waiting = facade
+    .waitAll({ turnIds: [first.turnId, second.turnId], waitMs: 1_000 }, actor)
+    .finally(() => {
+      settled = true;
+    });
+  await nextTask();
+  runtime.completions[0]?.({ status: "completed" });
+  await waitForTerminalTurn(facade, actor, first.turnId);
+  await nextTask();
+  assert.equal(settled, false);
+
+  runtime.completions[1]?.({ status: "completed" });
+  const result = await waiting;
+
+  assert.equal(result.mode, "all");
+  assert.equal(result.timedOut, false);
+  assert.deepEqual(result.pendingTurnIds, []);
+  assert.deepEqual(
+    result.ready.map((item) => ({ status: item.status, turnId: item.turn.turnId })),
+    [
+      { status: "terminal_without_message", turnId: first.turnId },
+      { status: "terminal_without_message", turnId: second.turnId },
+    ],
+  );
+});
+
+test("MultiAgentFacade waitAny is equivalent to wait many mode any", async () => {
+  const runtime = new ControlledAgentRuntime();
+  const { facade } = createHarness(runtime);
+  const root = await facade.bootstrapRoot({ agent: "codex", cwd: TEST_WORKSPACE });
+  const actor: FacadeActor = { rootExecutionId: root.rootExecutionId, agentId: root.agentId };
+  const child = await facade.createAgent({ agent: "claude" }, actor);
+  const receipt = await facade.send(
+    { agentId: child.agentId, content: "ready", idempotencyKey: "wait-any-wrapper" },
+    actor,
+  );
+  await waitForCondition(() => runtime.started.length === 1);
+  runtime.completions[0]?.({ status: "completed" });
+  await waitForTerminalTurn(facade, actor, receipt.turnId);
+
+  assert.deepEqual(
+    await facade.waitAny({ turnIds: [receipt.turnId] }, actor),
+    await facade.waitMany({ turnIds: [receipt.turnId], mode: "any" }, actor),
+  );
+});
+
+test("MultiAgentFacade waitAll returns permission early and can resume to terminal", async () => {
+  const runtime = new PermissionAgentRuntime();
+  const { facade } = createHarness(runtime);
+  const root = await facade.bootstrapRoot({ agent: "codex", cwd: TEST_WORKSPACE });
+  const actor: FacadeActor = { rootExecutionId: root.rootExecutionId, agentId: root.agentId };
+  const child = await facade.createAgent({ agent: "claude" }, actor);
+  const receipt = await facade.send(
+    { agentId: child.agentId, content: "permission", idempotencyKey: "wait-all-permission" },
+    actor,
+  );
+
+  const interrupted = await facade.waitAll({ turnIds: [receipt.turnId], waitMs: 1_000 }, actor);
+  assert.equal(interrupted.timedOut, false);
+  assert.deepEqual(interrupted.pendingTurnIds, [receipt.turnId]);
+  assert.equal(interrupted.ready[0]?.status, "action_required");
+  const permission =
+    interrupted.ready[0]?.status === "action_required"
+      ? interrupted.ready[0].permission
+      : undefined;
+  assert.ok(permission);
+
+  await facade.respondPermission(
+    { permissionId: permission.permissionId, outcome: "allow_once" },
+    actor,
+  );
+  const completed = await facade.waitAll(
+    { turnIds: interrupted.pendingTurnIds, waitMs: 1_000 },
+    actor,
+  );
+  const accumulated = new Map(
+    [...interrupted.ready, ...completed.ready].map((item) => [item.turn.turnId, item]),
+  );
+
+  assert.deepEqual(completed.pendingTurnIds, []);
+  assert.equal(completed.ready[0]?.status, "terminal_without_message");
+  assert.equal(accumulated.get(receipt.turnId)?.status, "terminal_without_message");
+});
+
+test("MultiAgentFacade waitAll projects terminal after cancelling a pending permission", async () => {
+  const runtime = new PermissionAgentRuntime();
+  const { facade } = createHarness(runtime);
+  const root = await facade.bootstrapRoot({ agent: "codex", cwd: TEST_WORKSPACE });
+  const actor: FacadeActor = { rootExecutionId: root.rootExecutionId, agentId: root.agentId };
+  const child = await facade.createAgent({ agent: "claude" }, actor);
+  const receipt = await facade.send(
+    {
+      agentId: child.agentId,
+      content: "permission then cancel",
+      idempotencyKey: "wait-all-cancelled-permission",
+    },
+    actor,
+  );
+  const interrupted = await facade.waitAll({ turnIds: [receipt.turnId], waitMs: 1_000 }, actor);
+  assert.equal(interrupted.ready[0]?.status, "action_required");
+
+  await facade.cancel({ turnId: receipt.turnId, reason: "review-fix" }, actor);
+  await waitForTerminalTurn(facade, actor, receipt.turnId);
+  const completed = await facade.waitAll({ turnIds: [receipt.turnId] }, actor);
+
+  assert.deepEqual(completed.pendingTurnIds, []);
+  assert.equal(completed.ready[0]?.status, "terminal_without_message");
+});
+
+test("MultiAgentFacade waitAll can accumulate complete results after timeout", async () => {
+  const runtime = new ControlledAgentRuntime();
+  const { facade } = createHarness(runtime);
+  const root = await facade.bootstrapRoot({ agent: "codex", cwd: TEST_WORKSPACE });
+  const actor: FacadeActor = { rootExecutionId: root.rootExecutionId, agentId: root.agentId };
+  const firstAgent = await facade.createAgent({ agent: "claude" }, actor);
+  const secondAgent = await facade.createAgent({ agent: "pi" }, actor);
+  const first = await facade.send(
+    { agentId: firstAgent.agentId, content: "first", idempotencyKey: "wait-timeout-first" },
+    actor,
+  );
+  const second = await facade.send(
+    { agentId: secondAgent.agentId, content: "second", idempotencyKey: "wait-timeout-second" },
+    actor,
+  );
+  await waitForCondition(() => runtime.started.length === 2);
+  runtime.completions[0]?.({ status: "completed" });
+  await waitForTerminalTurn(facade, actor, first.turnId);
+
+  const interrupted = await facade.waitAll(
+    { turnIds: [first.turnId, second.turnId], waitMs: 0 },
+    actor,
+  );
+  assert.equal(interrupted.timedOut, true);
+  assert.deepEqual(interrupted.pendingTurnIds, [second.turnId]);
+  assert.deepEqual(
+    interrupted.ready.map((item) => item.turn.turnId),
+    [first.turnId],
+  );
+
+  runtime.completions[1]?.({ status: "completed" });
+  const completed = await facade.waitAll(
+    { turnIds: interrupted.pendingTurnIds, waitMs: 1_000 },
+    actor,
+  );
+  const accumulated = new Map(
+    [...interrupted.ready, ...completed.ready].map((item) => [item.turn.turnId, item]),
+  );
+
+  assert.deepEqual([...accumulated.keys()], [first.turnId, second.turnId]);
+  assert.deepEqual(completed.pendingTurnIds, []);
+});
+
+test("MultiAgentFacade wait many uses one store waiter for a batch", async () => {
+  const runtime = new ControlledAgentRuntime();
+  const baseStore = createInMemoryFacadeStore();
+  let activeWaiters = 0;
+  let peakWaiters = 0;
+  let waitCalls = 0;
+  const countingStore: FacadeStore = {
+    read: async (reader) => await baseStore.read(reader),
+    update: async (mutator) => await baseStore.update(mutator),
+    waitForChange: async (afterRevision, waitMs, signal) => {
+      waitCalls += 1;
+      activeWaiters += 1;
+      peakWaiters = Math.max(peakWaiters, activeWaiters);
+      try {
+        return await baseStore.waitForChange(afterRevision, waitMs, signal);
+      } finally {
+        activeWaiters -= 1;
+      }
+    },
+  };
+  const { facade } = createHarness(runtime, undefined, [TEST_WORKSPACE], countingStore);
+  const root = await facade.bootstrapRoot({ agent: "codex", cwd: TEST_WORKSPACE });
+  const actor: FacadeActor = { rootExecutionId: root.rootExecutionId, agentId: root.agentId };
+  const agents = await Promise.all(
+    ["claude", "pi", "openclaw"].map(async (agent) => await facade.createAgent({ agent }, actor)),
+  );
+  const turns = await Promise.all(
+    agents.map(
+      async (agent, index) =>
+        await facade.send(
+          { agentId: agent.agentId, content: `${index}`, idempotencyKey: `single-waiter-${index}` },
+          actor,
+        ),
+    ),
+  );
+  await waitForCondition(() => runtime.started.length === turns.length);
+
+  const waiting = facade.waitAll(
+    { turnIds: turns.map((turn) => turn.turnId), waitMs: 1_000 },
+    actor,
+  );
+  await waitForCondition(() => activeWaiters === 1);
+  assert.equal(waitCalls, 1);
+  assert.equal(peakWaiters, 1);
+
+  for (const complete of runtime.completions) {
+    complete({ status: "completed" });
+  }
+  await waiting;
+  assert.equal(peakWaiters, 1);
 });
 
 test("MultiAgentFacade returns permission control to an ancestor and resumes the runtime callback", async () => {
@@ -1079,13 +1779,13 @@ test("MCP server exposes all facade tools and returns structured create results"
   });
   const structured = created.structuredContent as { agent?: { agent: string; state: string } };
 
-  assert.equal(tools.tools.length, 13);
+  assert.equal(tools.tools.length, 14);
   assert.match(instructions, /parallelizable/i);
   assert.match(instructions, /heterogeneous/i);
   assert.match(instructions, /do not delegate trivial or tightly coupled work/i);
   assert.match(
     instructions,
-    /cs_agent_capabilities.*cs_agent_create.*cs_agent_send.*cs_agent_wait_message.*cs_agent_destroy/is,
+    /cs_agent_capabilities.*cs_agent_create.*send all independent turns.*cs_agent_wait_many.*cs_agent_destroy/is,
   );
   assert.deepEqual(
     tools.tools.map((tool) => tool.name),
@@ -1098,6 +1798,7 @@ test("MCP server exposes all facade tools and returns structured create results"
       "cs_agent_send",
       "cs_agent_get_message",
       "cs_agent_wait_message",
+      "cs_agent_wait_many",
       "cs_agent_get_turn",
       "cs_agent_wait_turn",
       "cs_agent_respond_permission",
@@ -1115,6 +1816,7 @@ test("MCP server exposes all facade tools and returns structured create results"
     cs_agent_send: /self-contained task.*deliverable.*verification/i,
     cs_agent_get_message: /already have its id.*wait_message instead/i,
     cs_agent_wait_message: /preferred blocking wait after cs_agent_send/i,
+    cs_agent_wait_many: /send all independent turns first.*mode.*any.*all.*pendingTurnIds/i,
     cs_agent_get_turn: /detailed state.*error.*permission diagnostics/i,
     cs_agent_wait_turn: /state transitions matter more than reply content/i,
     cs_agent_respond_permission: /apply least privilege/i,
@@ -1216,6 +1918,27 @@ test("MCP tools preserve facade errors, correlations, bounded waits, cursors, an
     invalidContent[0]?.type === "text" ? (invalidContent[0].text ?? "") : "",
     /Invalid arguments/,
   );
+  const invalidWaitManyInputs = [
+    { turnIds: [] },
+    {
+      turnIds: Array.from(
+        { length: 65 },
+        (_, index) => `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+      ),
+    },
+    { turnIds: ["not-a-uuid"] },
+    { turnIds: ["00000000-0000-4000-8000-000000000105"], mode: "first" },
+    { turnIds: ["00000000-0000-4000-8000-000000000105"], waitMs: 30_001 },
+  ];
+  for (const invalidArguments of invalidWaitManyInputs) {
+    const invalidWaitMany = await client.callTool({
+      name: "cs_agent_wait_many",
+      arguments: invalidArguments,
+    });
+    assert.equal(invalidWaitMany.isError, true);
+    const content = invalidWaitMany.content as Array<{ type?: string; text?: string }>;
+    assert.match(content[0]?.type === "text" ? (content[0].text ?? "") : "", /Invalid arguments/);
+  }
   const missing = await client.callTool({
     name: "cs_agent_status",
     arguments: { agentId: "00000000-0000-4000-8000-000000000001" },

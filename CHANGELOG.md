@@ -2,7 +2,30 @@
 
 本文件记录 `cs-agent-mcp` 的用户可见变更。
 
-## 未发布
+## 0.2.5 - 2026-07-20
+
+### Agent Wait Many
+
+- 新增 `cs_agent_wait_many`，支持先异步 fan-out 多个 Turn，再按 `any` 或 `all` 一次 fan-in；
+  `any` 返回当前全部 ready 项，`all` 支持权限/timeout 中断后通过 `pendingTurnIds` 续等并跨轮累计。
+- Facade 提供 `waitMany`、`waitAny`、`waitAll`，批量等待使用单 snapshot 原子鉴权和单个 revision
+  waiter，不修改 Facade snapshot v1 或既有 13 个工具的行为。
+- tarball smoke 现在通过实际临时安装验证 14 tools，并调用 wait-many 完成 Agent 生命周期。
+
+### Prompt 超时完整性修复
+
+- `cs_agent_send.timeoutMs` 不再被错误地用作整个 Agent Turn 的执行期限，长时间代码审查不会因
+  提交 timeout 提前取消；同一幂等任务仅 `timeoutMs` 不同时也会复用原 receipt，升级前包含
+  timeout 的旧 fingerprint 会在首次成功重试时惰性迁移。
+- ACP prompt 真正超时时现在返回 `failed/TIMEOUT`；已到达的过程事件仍可用于诊断，但不会再把
+  部分文本或 tool result 伪装成最终 Message 和 `completed/end_turn`。
+
+### Agent Top 会话可读性
+
+- `agents top|ps` 的 Attach 现在可读取并按时间合并 oneshot Agent 的原生 session records；历史
+  session 不存在时显示 conversation unavailable 和已有错误，不再无限停在 waiting。
+- 用户、助手、thinking、tool call、tool result 和 tool error 使用独立类型标题与缩进正文；滚动
+  视口继续按渲染行稳定定位，paused 未读数改为按新增消息计算。
 
 ## 0.2.4 - 2026-07-19
 

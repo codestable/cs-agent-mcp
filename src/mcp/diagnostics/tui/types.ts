@@ -38,6 +38,7 @@ export type TopTerminal = TextMetrics & {
 export type AttachViewState = {
   agent: AgentDiagnosticSummary;
   items: DiagnosticConversationItem[];
+  conversationState?: "loading" | "waiting" | "ready" | "unavailable";
   scrollOffset: number;
   unreadCount: number;
   trimmedCount: number;

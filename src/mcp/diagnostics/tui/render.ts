@@ -155,12 +155,22 @@ function renderAttach(
     lines[bodyStart - 1 + index] = [segment(fit(line.text, width, metrics), line.style)];
   }
   if (visible.length === 0) {
-    lines[bodyStart - 1] = [segment("Waiting for conversation...", "muted")];
+    lines[bodyStart - 1] = [segment(emptyConversationText(attach), "muted")];
   }
 
   const trimText = attach.trimmedCount > 0 ? ` | trimmed ${attach.trimmedCount}` : "";
+  const agentError =
+    attach.conversationState === "unavailable" ? attach.agent.lastError : undefined;
+  const status = state.message ?? (agentError ? `${agentError.code}: ${agentError.message}` : "");
   lines[height - 2] = [
-    segment(fit(`${state.message ?? ""}${trimText}`, width, metrics), statusStyle(state)),
+    segment(
+      fit(`${status}${trimText}`, width, metrics),
+      agentError && !state.message
+        ? agentError.retryable
+          ? "warning"
+          : "error"
+        : statusStyle(state),
+    ),
   ];
   lines[height - 1] = [
     segment(
@@ -173,68 +183,103 @@ function renderAttach(
 
 type AttachItem = DiagnosticConversationItem;
 type AttachLine = { text: string; style: TopStyle };
+type ConversationPresentation = {
+  header: string;
+  text: string;
+  headerStyle: TopStyle;
+  bodyStyle: TopStyle;
+};
 
 export function countAttachLines(items: AttachItem[], width: number, metrics: TextMetrics): number {
   return attachLines(items, width, metrics).length;
 }
 
 function attachLines(items: AttachItem[], width: number, metrics: TextMetrics): AttachLine[] {
-  return items.flatMap((item) => {
-    const conversation = conversationText(item);
-    return wrapConversationText(conversation.prefix, conversation.text, width, metrics).map(
-      (text) => ({ text, style: timelineStyle(item) }),
-    );
+  return items.flatMap((item, index) => {
+    const presentation = conversationPresentation(item);
+    const header = metrics.truncate(sanitizeTerminalText(presentation.header), width);
+    const body = wrapConversationBody(presentation.text, width, metrics).map((text) => ({
+      text,
+      style: presentation.bodyStyle,
+    }));
+    return [
+      ...(index > 0 ? [{ text: "", style: "muted" as const }] : []),
+      { text: header, style: presentation.headerStyle },
+      ...body,
+    ];
   });
 }
 
-function conversationText(item: AttachItem): { prefix: string; text: string } {
+// oxlint-disable-next-line complexity -- exhaustive mapping keeps each conversation kind visually distinct
+function conversationPresentation(item: AttachItem): ConversationPresentation {
   if (item.kind === "user") {
-    return { prefix: "YOU    ", text: item.text };
+    return { header: "[USER]", text: item.text, headerStyle: "accent", bodyStyle: "normal" };
   }
   if (item.kind === "assistant") {
-    return { prefix: "AGENT  ", text: item.text };
+    return {
+      header: "[ASSISTANT]",
+      text: item.text,
+      headerStyle: "header",
+      bodyStyle: "normal",
+    };
   }
   if (item.kind === "resume") {
-    return { prefix: "SESSION  ", text: "resumed" };
+    return {
+      header: "[SESSION]",
+      text: item.label ?? "resumed",
+      headerStyle: "muted",
+      bodyStyle: "muted",
+    };
   }
   if (item.kind === "thinking") {
     return {
-      prefix: "THINKING  ",
+      header: "[THINKING]",
       text: item.redacted ? "[redacted_thinking]" : item.text,
+      headerStyle: "muted",
+      bodyStyle: "muted",
     };
   }
   if (item.kind === "tool_call") {
-    return { prefix: `TOOL   ${item.name}  `, text: item.input };
+    return {
+      header: `[TOOL CALL] ${item.name}`,
+      text: item.input,
+      headerStyle: "accent",
+      bodyStyle: "normal",
+    };
   }
-  return { prefix: `${item.isError ? "ERROR" : "RESULT"} ${item.name}  `, text: item.text };
+  return {
+    header: `[${item.isError ? "TOOL ERROR" : "TOOL RESULT"}] ${item.name}`,
+    text: item.text,
+    headerStyle: item.isError ? "error" : "header",
+    bodyStyle: item.isError ? "error" : "normal",
+  };
 }
 
-function wrapConversationText(
-  prefix: string,
-  text: string,
-  width: number,
-  metrics: TextMetrics,
-): string[] {
-  const rawPrefix = sanitizeTerminalText(prefix);
-  const prefixBudget = Math.max(1, Math.floor(width * 0.4));
-  const safePrefix =
-    metrics.measure(rawPrefix) > prefixBudget
-      ? `${metrics.truncate(rawPrefix, Math.max(1, prefixBudget - 1))} `
-      : rawPrefix;
-  const prefixWidth = metrics.measure(safePrefix);
-  const continuation = " ".repeat(prefixWidth);
-  const contentWidth = Math.max(1, width - prefixWidth);
+function wrapConversationBody(text: string, width: number, metrics: TextMetrics): string[] {
+  const indent = "  ";
+  const contentWidth = Math.max(1, width - metrics.measure(indent));
   const paragraphs = text.split(/\r\n|\r|\n/u);
   const lines: string[] = [];
-  let first = true;
   for (const paragraph of paragraphs) {
     const wrapped = wrapVisibleText(sanitizeTerminalText(paragraph), contentWidth, metrics);
     for (const line of wrapped) {
-      lines.push(`${first ? safePrefix : continuation}${line}`);
-      first = false;
+      lines.push(`${indent}${line}`);
     }
   }
-  return lines.length > 0 ? lines : [safePrefix];
+  return lines.length > 0 ? lines : [indent];
+}
+
+function emptyConversationText(attach: AgentsTopState["attach"]): string {
+  if (attach?.conversationState === "unavailable") {
+    return "Conversation unavailable for this historical session.";
+  }
+  if (attach?.conversationState === "waiting") {
+    return "Waiting for the first conversation message...";
+  }
+  if (attach?.conversationState === "ready") {
+    return "Conversation is empty.";
+  }
+  return "Loading conversation...";
 }
 
 function wrapVisibleText(text: string, width: number, metrics: TextMetrics): string[] {
@@ -321,25 +366,6 @@ function renderAgentColumns(
   ]
     .map((columnWidth, index) => cell(values[index] ?? "", columnWidth, metrics))
     .join(" ");
-}
-
-function timelineStyle(item: DiagnosticConversationItem): TopStyle {
-  if (item.kind === "user") {
-    return "accent";
-  }
-  if (item.kind === "assistant") {
-    return "normal";
-  }
-  if (item.kind === "resume") {
-    return "muted";
-  }
-  if (item.kind === "thinking") {
-    return "muted";
-  }
-  if (item.kind === "tool_call") {
-    return "accent";
-  }
-  return item.isError ? "error" : "normal";
 }
 
 function stateStyle(agent: AgentDiagnosticSummary, stale: boolean): TopStyle {

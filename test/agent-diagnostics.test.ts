@@ -29,6 +29,7 @@ function agent(input: {
   agentId: string;
   rootExecutionId?: string;
   kind?: "root" | "managed";
+  mode?: "persistent" | "oneshot";
   state?: FacadeSnapshot["agents"][string]["state"];
   cwd?: string;
 }): FacadeSnapshot["agents"][string] {
@@ -38,7 +39,7 @@ function agent(input: {
     kind: input.kind ?? "managed",
     agent: "claude",
     cwd: input.cwd ?? "/workspace",
-    mode: "persistent",
+    mode: input.mode ?? "persistent",
     depth: input.kind === "root" ? 0 : 1,
     state: input.state ?? "idle",
     queueDepth: 0,
@@ -144,6 +145,76 @@ test("agent diagnostics reads the existing managed runtime conversation", async 
     },
     { kind: "assistant", text: "The owner is root-1." },
   ]);
+});
+
+test("agent diagnostics merges native oneshot conversations in chronological order", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "cs-agent-oneshot-conversation-"));
+  t.after(async () => await fs.rm(directory, { recursive: true, force: true }));
+  const facadesDir = path.join(directory, "facades");
+  const sessionsDir = path.join(directory, "sessions");
+  await fs.mkdir(facadesDir, { recursive: true });
+  await fs.mkdir(sessionsDir, { recursive: true });
+  const agentId = "12121212-1212-4121-8121-121212121212";
+  const rootExecutionId = "root-oneshot";
+  await writeJson(
+    path.join(facadesDir, "abababababababababababab.json"),
+    snapshot({ [agentId]: agent({ agentId, rootExecutionId, mode: "oneshot" }) }),
+  );
+  const recordId = `mcp-${rootExecutionId}-${agentId}`;
+  const records = [
+    makeSessionRecord({
+      acpxRecordId: `${recordId}:oneshot:first`,
+      acpSessionId: "native-session-first",
+      agentCommand: "claude-acp",
+      cwd: "/workspace",
+      createdAt: "2026-07-17T00:00:00.000Z",
+      lastUsedAt: "2026-07-17T00:00:01.000Z",
+      updated_at: "2026-07-17T00:00:01.000Z",
+      messages: [{ User: { id: "user-first", content: [{ Text: "First task" }] } }],
+    }),
+    makeSessionRecord({
+      acpxRecordId: `${recordId}:oneshot:second`,
+      acpSessionId: "native-session-second",
+      agentCommand: "claude-acp",
+      cwd: "/workspace",
+      createdAt: "2026-07-17T00:00:02.000Z",
+      lastUsedAt: "2026-07-17T00:00:03.000Z",
+      updated_at: "2026-07-17T00:00:03.000Z",
+      messages: [
+        {
+          Agent: {
+            content: [{ Text: "Second result" }],
+            tool_results: {},
+          },
+        },
+      ],
+    }),
+  ];
+  for (const record of records.toReversed()) {
+    await writeJson(
+      path.join(sessionsDir, `${encodeURIComponent(record.acpxRecordId)}.json`),
+      serializeSessionRecordForDisk(record),
+    );
+  }
+
+  const conversation = await createAgentDiagnostics({
+    facadesDir,
+    sessionsDir,
+  }).readConversation(agentId);
+
+  assert.deepEqual(
+    conversation?.items.map((item) =>
+      item.kind === "user" || item.kind === "assistant"
+        ? { kind: item.kind, text: item.text }
+        : { kind: item.kind },
+    ),
+    [
+      { kind: "user", text: "First task" },
+      { kind: "resume" },
+      { kind: "assistant", text: "Second result" },
+    ],
+  );
+  assert.equal(conversation?.updatedAt, "2026-07-17T00:00:03.000Z");
 });
 
 function createFakeScheduler() {

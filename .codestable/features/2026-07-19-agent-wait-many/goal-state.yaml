@@ -1,0 +1,58 @@
+feature: "2026-07-19-agent-wait-many"
+status: passed
+baseline_ref: "73a52d29ae0dabf9af854d3d8f47211f4dca0d6b"
+stage: complete
+driver_kind: none
+driver_id: ""
+handoff_reason: ""
+handoff_next: ""
+current_iteration: 8
+blocker_signature: null
+blocker_count: 0
+owner_stop: null
+design: ".codestable/features/2026-07-19-agent-wait-many/agent-wait-many-design.md"
+checklist: ".codestable/features/2026-07-19-agent-wait-many/agent-wait-many-checklist.yaml"
+review: ".codestable/features/2026-07-19-agent-wait-many/agent-wait-many-review.md"
+qa: ".codestable/features/2026-07-19-agent-wait-many/agent-wait-many-qa.md"
+acceptance: ".codestable/features/2026-07-19-agent-wait-many/agent-wait-many-acceptance.md"
+ledger:
+  - step_id: S1
+    status: done
+    commit_range: "working-tree (no commit requested)"
+    evidence: "RED 13 != 14；GREEN/VERIFY MCP tool contract 1/1，14 tools、wait-many schema、instructions 与 descriptions 已接通"
+    iteration: 1
+  - step_id: S2
+    status: done
+    commit_range: "working-tree (no commit requested)"
+    evidence: "RED explicit RUNTIME_FAILURE；GREEN/VERIFY wait-many Facade tests 4/4，覆盖混合投影、有序去重、raw 边界、unknown/sibling 原子失败与 timeout 不取消"
+    iteration: 2
+  - step_id: S3
+    status: done
+    commit_range: "working-tree (no commit requested)"
+    evidence: "RED waitAll API missing；GREEN/VERIFY wait-many/waitAny/waitAll tests 9/9，覆盖 long-poll、权限与 timeout 两轮累计、wrapper 等价和 peak waiter=1"
+    iteration: 3
+  - step_id: S4
+    status: done
+    commit_range: "working-tree (no commit requested)"
+    evidence: "MCP/ACP 多进程 barrier+permission E2E passed；CMD-003 51/51；pnpm run check 265/265；最终 tarball SDK smoke toolCount=14 waitMany/lifecycle/diagnostics=ok"
+    iteration: 4
+  - step_id: REVIEW-FIX-R1
+    status: done
+    commit_range: "working-tree (no commit requested)"
+    evidence: "REV-001 cancelled permission 投影修复回归 1/1；REV-002 Windows .cmd spawn 回归 1/1；fresh pnpm run check 267/267；fresh tarball SDK smoke 14 tools 全绿"
+    iteration: 5
+  - step_id: REVIEW-R2
+    status: done
+    commit_range: "working-tree (no commit requested)"
+    evidence: "Paseo Claude Opus plan-mode review spec/code PASS；OCR 18 files 1 Low discarded；fresh DoD runner check 267/267、CMD-003 52/52、tarball 14 tools 全绿；reviewer archived"
+    iteration: 6
+  - step_id: QA-R1
+    status: done
+    commit_range: "working-tree (no commit requested)"
+    evidence: "功能性 QA passed；fresh DoD 3/3：check 267/267、定向 52/52、tarball 14 tools waitMany/lifecycle/diagnostics 全绿；无 failed/blocked"
+    iteration: 7
+  - step_id: ACCEPTANCE-R1
+    status: done
+    commit_range: "working-tree (no commit requested)"
+    evidence: "Paseo Claude Opus plan-mode 独立验收 C01-C12 与 design 12 场景全 pass；final check 267/267；final tarball smoke 14 tools 全绿；acceptance agent archived"
+    iteration: 8

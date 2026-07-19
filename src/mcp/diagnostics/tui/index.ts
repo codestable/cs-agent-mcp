@@ -1,7 +1,13 @@
 import type { AgentDiagnostics, AgentDiagnosticSummary } from "../index.js";
 import { moveSelection, reconcileSelection, scrollAttach, visibleAgents } from "./model.js";
 import { countAttachLines, renderTop } from "./render.js";
-import type { AgentsTopState, TerminalEvent, TopFrame, TopTerminal } from "./types.js";
+import type {
+  AgentsTopState,
+  AttachViewState,
+  TerminalEvent,
+  TopFrame,
+  TopTerminal,
+} from "./types.js";
 
 const DEFAULT_REFRESH_MS = 1_000;
 const DEFAULT_HISTORY = 100;
@@ -330,6 +336,7 @@ class AgentsTopController {
     this.state.attach = {
       agent,
       items: [],
+      conversationState: "loading",
       scrollOffset: 0,
       unreadCount: 0,
       trimmedCount: 0,
@@ -452,10 +459,21 @@ class AgentsTopController {
     }
     try {
       const conversation = await this.diagnostics.readConversation(attach.agent.agentId);
-      if (!conversation || !this.isCurrentAttach(generation) || !this.state.attach) {
+      if (!this.isCurrentAttach(generation) || !this.state.attach) {
         return;
       }
       const current = this.state.attach;
+      if (!conversation) {
+        this.state.attach = {
+          ...current,
+          conversationState:
+            current.agent.instance.state === "running" && !current.terminalReason
+              ? "waiting"
+              : "unavailable",
+        };
+        this.render();
+        return;
+      }
       const previousLineCount = countAttachLines(current.items, this.terminal.width, this.terminal);
       const nextLineCount = countAttachLines(
         conversation.items,
@@ -463,12 +481,14 @@ class AgentsTopController {
         this.terminal,
       );
       const addedLineCount = Math.max(0, nextLineCount - previousLineCount);
+      const addedItemCount = Math.max(0, conversation.items.length - current.items.length);
       const paused = current.scrollOffset > 0;
-      const next = {
+      const next: AttachViewState = {
         ...current,
         items: conversation.items,
+        conversationState: "ready",
         scrollOffset: paused ? current.scrollOffset + addedLineCount : 0,
-        unreadCount: paused ? current.unreadCount + addedLineCount : 0,
+        unreadCount: paused ? current.unreadCount + addedItemCount : 0,
       };
       this.state.attach = scrollAttach(
         next,
@@ -481,6 +501,9 @@ class AgentsTopController {
     } catch (cause) {
       if (!this.isCurrentAttach(generation)) {
         return;
+      }
+      if (this.state.attach) {
+        this.state.attach = { ...this.state.attach, conversationState: "unavailable" };
       }
       this.state.message = cause instanceof Error ? cause.message : String(cause);
       this.state.messageKind = "error";

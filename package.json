@@ -1,6 +1,6 @@
 {
   "name": "cs-agent-mcp",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "通过 MCP 统一创建、调用和编排本机 Codex、Claude 等编码 Agent",
   "keywords": [
     "acp",
@@ -51,9 +51,10 @@
     "lint:fix": "oxlint --type-aware --tsconfig=tsconfig.test.json --fix src test && pnpm run format",
     "pack:check": "npm pack --dry-run",
     "package:smoke": "node scripts/package-smoke.mjs",
+    "package:smoke:tarball": "node scripts/package-smoke-tarball.mjs",
     "prepack": "tsdown --logLevel silent src/mcp-cli.ts --format esm --clean --platform node --target node22 --no-fixedExtension",
     "prepublishOnly": "pnpm run check",
-    "test": "pnpm run build:test && node --test dist-test/test/agent-diagnostics.test.js dist-test/test/agent-tui.test.js dist-test/test/client.test.js dist-test/test/file-session-store.test.js dist-test/test/mcp-cli.test.js dist-test/test/mcp-broker.test.js dist-test/test/mcp-e2e.test.js dist-test/test/mcp-facade-lock.test.js dist-test/test/mcp-facade-store.test.js dist-test/test/mcp-facade.test.js dist-test/test/mcp-runtime-adapter.test.js dist-test/test/runtime-manager.test.js dist-test/test/spawn-options.test.js",
+    "test": "pnpm run build:test && node --test dist-test/test/agent-diagnostics.test.js dist-test/test/agent-tui.test.js dist-test/test/client.test.js dist-test/test/file-session-store.test.js dist-test/test/mcp-cli.test.js dist-test/test/mcp-broker.test.js dist-test/test/mcp-e2e.test.js dist-test/test/mcp-facade-lock.test.js dist-test/test/mcp-facade-store.test.js dist-test/test/mcp-facade.test.js dist-test/test/mcp-runtime-adapter.test.js dist-test/test/runtime-manager.test.js dist-test/test/spawn-options.test.js test/package-spawn.test.mjs",
     "test:tui-e2e": "node scripts/agent-top-e2e.mjs",
     "typecheck": "tsc6 --noEmit",
     "typecheck:tsc": "tsc6 --noEmit"

@@ -70,20 +70,4 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: 打包并安装
-        shell: bash
-        run: |
-          set -euo pipefail
-          pnpm run build:test
-          package_file=$(npm pack --json --silent | node -e '
-            let input = "";
-            process.stdin.on("data", (chunk) => (input += chunk));
-            process.stdin.on("end", () => console.log(JSON.parse(input)[0].filename));
-          ')
-          install_root="${RUNNER_TEMP}/cs-agent-mcp-install"
-          npm install --prefix "${install_root}" "./${package_file}" --no-audit --no-fund
-          binary="${install_root}/node_modules/.bin/cs-agent-mcp"
-          "${binary}" --version
-          "${binary}" --help
-          CS_AGENT_MCP_BIN="${binary}" \
-            CS_AGENT_MCP_MOCK_AGENT="${PWD}/dist-test/test/mock-agent.js" \
-            pnpm run package:smoke
+        run: pnpm run package:smoke:tarball

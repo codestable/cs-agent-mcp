@@ -268,6 +268,21 @@ export type WaitMessageResult =
   | { status: "terminal_without_message"; turn: Turn }
   | { status: "timed_out"; turn: Turn; retryAfterMs: number };
 
+export type WaitManyMode = "any" | "all";
+
+export type WaitManyReadyItem =
+  | { status: "message"; message: Message; turn: Turn }
+  | { status: "action_required"; turn: Turn; permission: Permission }
+  | { status: "terminal_without_message"; turn: Turn };
+
+export type WaitManyResult = {
+  mode: WaitManyMode;
+  ready: WaitManyReadyItem[];
+  pendingTurnIds: string[];
+  timedOut: boolean;
+  retryAfterMs?: number;
+};
+
 export type EventsPage = {
   events: FacadeEvent[];
   nextCursor: string;

@@ -11,7 +11,7 @@ import type {
 } from "../src/mcp/diagnostics/index.js";
 import { runAgentsTop } from "../src/mcp/diagnostics/tui/index.js";
 import { scrollAttach } from "../src/mcp/diagnostics/tui/model.js";
-import { renderTop } from "../src/mcp/diagnostics/tui/render.js";
+import { countAttachLines, renderTop } from "../src/mcp/diagnostics/tui/render.js";
 import { sanitizeTerminalText } from "../src/mcp/diagnostics/tui/sanitize.js";
 import type {
   AgentsTopState,
@@ -39,6 +39,8 @@ test("sanitizeTerminalText removes terminal controls while preserving visible wi
 
 test("scrollAttach keeps a full viewport when moving to the oldest conversation lines", () => {
   const items = conversationLines(30).items;
+  const terminal = new FakeTerminal();
+  const renderedLineCount = countAttachLines(items, 90, terminal);
   const attach: AttachViewState = {
     agent: diagnosticAgent("managed-1"),
     items,
@@ -47,15 +49,15 @@ test("scrollAttach keeps a full viewport when moving to the oldest conversation 
     trimmedCount: 0,
   };
 
-  const oldestPage = scrollAttach(attach, items.length, false, 10);
+  const oldestPage = scrollAttach(attach, renderedLineCount, false, 10, renderedLineCount);
 
-  assert.equal(oldestPage.scrollOffset, 20);
+  assert.equal(oldestPage.scrollOffset, renderedLineCount - 10);
   const state = baseState([]);
   state.mode = "attach";
-  state.attach = { ...oldestPage, scrollOffset: items.length - 1 };
-  const text = frameText(renderTop(state, 90, 15, new FakeTerminal()));
+  state.attach = oldestPage;
+  const text = frameText(renderTop(state, 90, 15, terminal));
   assert.match(text, /line-0/);
-  assert.match(text, /line-9/);
+  assert.match(text, /line-2/);
 });
 
 test("runAgentsTop rejects redirected output without emitting terminal controls", async () => {
@@ -152,8 +154,8 @@ test("Agent Top Attach renders the managed session conversation", async () => {
   terminal.emit({ type: "key", name: "ENTER" });
 
   await waitFor(() => frameText(terminal.lastFrame).includes("Inspect the workspace"));
-  assert.match(frameText(terminal.lastFrame), /YOU/);
-  assert.match(frameText(terminal.lastFrame), /AGENT/);
+  assert.match(frameText(terminal.lastFrame), /\[USER\]\n\s+Inspect the workspace/);
+  assert.match(frameText(terminal.lastFrame), /\[ASSISTANT\]\n\s+I found/);
   assert.match(frameText(terminal.lastFrame), /failing ownership check/);
 
   terminal.emit({ type: "key", name: "q" });
@@ -182,9 +184,80 @@ test("Agent Top Attach renders thinking and tool call details", () => {
   };
 
   const text = frameText(renderTop(state, 100, 16, new FakeTerminal()));
-  assert.match(text, /THINKING.*ownership record/);
-  assert.match(text, /TOOL.*Read.*lock\.json/);
-  assert.match(text, /RESULT.*Read.*root-1/);
+  assert.match(text, /\[THINKING\]\n\s+I should inspect/);
+  assert.match(text, /\[TOOL CALL\] Read\n\s+.*lock\.json/);
+  assert.match(text, /\[TOOL RESULT\] Read\n\s+.*root-1/);
+});
+
+test("Agent Top Attach distinguishes unavailable historical conversations from loading", async () => {
+  const terminal = new FakeTerminal();
+  const diagnostics = new FakeDiagnostics();
+  diagnostics.enqueueList({
+    agents: [
+      diagnosticAgent("managed-stopped", {
+        instanceState: "stopped",
+        lastError: {
+          code: "SESSION_RESUME_REQUIRED",
+          message: "Native session no longer exists",
+          retryable: true,
+        },
+      }),
+    ],
+    warnings: [],
+  });
+
+  const running = runAgentsTop({ diagnostics, terminal, refreshMs: 60_000 });
+  await waitFor(() => frameText(terminal.lastFrame).includes("managed 1"));
+  terminal.emit({ type: "key", name: "ENTER" });
+  await waitFor(() => frameText(terminal.lastFrame).includes("Conversation unavailable"));
+  const text = frameText(terminal.lastFrame);
+
+  assert.doesNotMatch(text, /Waiting for the first conversation/);
+  assert.match(text, /SESSION_RESUME_REQUIRED/);
+  terminal.emit({ type: "key", name: "q" });
+  assert.equal(await running, 0);
+});
+
+test("Agent Top Attach renders conversation read failures as unavailable", async () => {
+  const terminal = new FakeTerminal();
+  const diagnostics = new FakeDiagnostics();
+  diagnostics.enqueueList({ agents: [diagnosticAgent("managed-corrupt")], warnings: [] });
+  diagnostics.conversationError = new Error("Invalid ACP session record");
+
+  const running = runAgentsTop({ diagnostics, terminal, refreshMs: 60_000 });
+  await waitFor(() => frameText(terminal.lastFrame).includes("managed 1"));
+  terminal.emit({ type: "key", name: "ENTER" });
+  await waitFor(() => frameText(terminal.lastFrame).includes("Invalid ACP session record"));
+  const text = frameText(terminal.lastFrame);
+
+  assert.match(text, /Conversation unavailable/);
+  assert.doesNotMatch(text, /Loading conversation/);
+  terminal.emit({ type: "key", name: "q" });
+  assert.equal(await running, 0);
+});
+
+test("Agent Top Attach transitions a running conversation from waiting to ready", async () => {
+  const terminal = new FakeTerminal();
+  const diagnostics = new FakeDiagnostics();
+  diagnostics.enqueueList({ agents: [diagnosticAgent("managed-delayed")], warnings: [] });
+
+  const running = runAgentsTop({ diagnostics, terminal, refreshMs: 10 });
+  await waitFor(() => frameText(terminal.lastFrame).includes("managed 1"));
+  terminal.emit({ type: "key", name: "ENTER" });
+  await waitFor(() =>
+    frameText(terminal.lastFrame).includes("Waiting for the first conversation message"),
+  );
+
+  diagnostics.conversation = {
+    schema: "cs-agent-mcp.diagnostics.v1",
+    updatedAt: TIMESTAMP,
+    items: [{ kind: "assistant", text: "Delayed first reply" }],
+  };
+  await waitFor(() => frameText(terminal.lastFrame).includes("Delayed first reply"));
+  assert.doesNotMatch(frameText(terminal.lastFrame), /Waiting for the first conversation/);
+
+  terminal.emit({ type: "key", name: "q" });
+  assert.equal(await running, 0);
 });
 
 test("Agent Top Attach keeps tool content visible when the tool name is long", () => {
@@ -489,6 +562,7 @@ class FakeTerminal implements TopTerminal {
 class FakeDiagnostics implements AgentDiagnostics {
   readonly feed = new TimelineFeed();
   conversation?: DiagnosticConversation;
+  conversationError?: Error;
   conversationDelayMs = 0;
   conversationGate?: Deferred<void>;
   concurrentConversationReads = 0;
@@ -536,6 +610,9 @@ class FakeDiagnostics implements AgentDiagnostics {
         await new Promise((resolve) => setTimeout(resolve, this.conversationDelayMs));
       }
       await this.conversationGate?.promise;
+      if (this.conversationError) {
+        throw this.conversationError;
+      }
       return this.conversation;
     } finally {
       this.concurrentConversationReads -= 1;
@@ -604,12 +681,14 @@ function diagnosticAgent(
     name?: string;
     cwd?: string;
     instanceId?: string;
+    instanceState?: "running" | "stopped" | "unknown";
+    lastError?: AgentDiagnosticSummary["lastError"];
   } = {},
 ): AgentDiagnosticSummary {
   return {
     instance: {
       instanceId: options.instanceId ?? "instance-1",
-      state: "running",
+      state: options.instanceState ?? "running",
       pid: process.pid,
       rootCwd: "/workspace",
       snapshotPath: `/tmp/${options.instanceId ?? "instance-1"}.json`,
@@ -625,6 +704,7 @@ function diagnosticAgent(
     queueDepth: 0,
     createdAt: TIMESTAMP,
     updatedAt: TIMESTAMP,
+    lastError: options.lastError,
   };
 }
 

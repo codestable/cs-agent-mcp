@@ -1200,7 +1200,7 @@ test("AcpRuntimeManager live checkpoints preserve active close state", async () 
   await turn.result;
 });
 
-test("AcpRuntimeManager accepts a session reply even when the prompt RPC times out", async () => {
+test("AcpRuntimeManager fails a timed-out prompt even after observing a partial reply", async () => {
   const record = makeSessionRecord({
     acpxRecordId: "late-reply-session",
     acpSessionId: "late-reply-sid",
@@ -1262,10 +1262,13 @@ test("AcpRuntimeManager accepts a session reply even when the prompt RPC times o
   assert.deepEqual(events, [
     { type: "text_delta", text: "late reply", stream: "output", tag: "agent_message_chunk" },
   ]);
-  assert.deepEqual(result, { status: "completed", stopReason: "end_turn" });
+  assert.deepEqual(result, {
+    status: "failed",
+    error: { code: "TIMEOUT", message: "Timed out after 20ms" },
+  });
 });
 
-test("AcpRuntimeManager waits for late reply chunks to settle before ending a salvaged turn", async () => {
+test("AcpRuntimeManager retains late reply chunks without treating them as a final reply", async () => {
   const record = makeSessionRecord({
     acpxRecordId: "late-reply-stream-session",
     acpSessionId: "late-reply-stream-sid",
@@ -1350,7 +1353,10 @@ test("AcpRuntimeManager waits for late reply chunks to settle before ending a sa
     { type: "text_delta", text: "late", stream: "output", tag: "agent_message_chunk" },
     { type: "text_delta", text: " reply", stream: "output", tag: "agent_message_chunk" },
   ]);
-  assert.deepEqual(result, { status: "completed", stopReason: "end_turn" });
+  assert.deepEqual(result, {
+    status: "failed",
+    error: { code: "TIMEOUT", message: "Timed out after 20ms" },
+  });
 });
 
 test("AcpRuntimeManager routes controls through the active controller while a turn is running", async () => {

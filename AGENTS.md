@@ -41,7 +41,7 @@ node dist/mcp-cli.js --help
 - `src/mcp/facade/`：Agent、Turn、Message、Permission、Event 和递归委派状态机。
 - `src/mcp/runtime-adapter.ts`：Facade 到 ACP runtime 的适配。
 - `src/runtime/`、`src/acp/`：ACP 会话、Agent 进程、恢复和权限处理。
-- `test/mcp-cli.test.ts`、`test/mcp-e2e.test.ts`：公开入口和 13 个工具的 E2E。
+- `test/mcp-cli.test.ts`、`test/mcp-e2e.test.ts`：公开入口和 14 个工具的 E2E。
 
 ## 验证
 
@@ -51,7 +51,7 @@ node dist/mcp-cli.js --help
 pnpm run check
 ```
 
-发布前还要用 `npm pack` 生成的 tarball 做临时全局安装，并通过 MCP SDK 验证 13 个工具。
+发布前还要用 `npm pack` 生成的 tarball 做临时安装，并通过 MCP SDK 验证 14 个工具。
 涉及 Codex/Claude 启动时，应在本机登录状态下各跑一次真实调用；涉及递归委派时，至少验证
 Claude 创建 Codex 子 Agent 或反向等价链路。
 

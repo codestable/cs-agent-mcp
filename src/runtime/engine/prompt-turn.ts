@@ -1,8 +1,5 @@
 import { TimeoutError, withTimeout } from "../../async-control.js";
-import {
-  hasAgentReplyAfterPrompt,
-  recordPromptResponseUsage,
-} from "../../session/conversation-model.js";
+import { recordPromptResponseUsage } from "../../session/conversation-model.js";
 import type { PromptInput, RunPromptResult, SessionConversation } from "../../types.js";
 
 const SESSION_REPLY_IDLE_MS = 1_000;
@@ -52,7 +49,7 @@ export async function runPromptTurn(params: {
       source: "rpc",
     };
   } catch (error) {
-    if (!(error instanceof TimeoutError) || !params.promptMessageId) {
+    if (!(error instanceof TimeoutError)) {
       throw error;
     }
 
@@ -65,13 +62,6 @@ export async function runPromptTurn(params: {
       .catch(() => {
         // Best effort. If the update drain itself times out, fall back to the prompt error.
       });
-
-    if (hasAgentReplyAfterPrompt(params.conversation, params.promptMessageId)) {
-      return {
-        stopReason: "end_turn",
-        source: "session",
-      };
-    }
 
     throw error;
   }

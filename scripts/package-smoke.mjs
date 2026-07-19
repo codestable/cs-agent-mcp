@@ -8,6 +8,7 @@ import {
   getDefaultEnvironment,
   StdioClientTransport,
 } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { packageCommandSpawnOptions } from "./package-command-spawn.mjs";
 
 const EXPECTED_TOOLS = [
   "cs_agent_capabilities",
@@ -18,6 +19,7 @@ const EXPECTED_TOOLS = [
   "cs_agent_send",
   "cs_agent_get_message",
   "cs_agent_wait_message",
+  "cs_agent_wait_many",
   "cs_agent_get_turn",
   "cs_agent_wait_turn",
   "cs_agent_respond_permission",
@@ -34,6 +36,12 @@ function requiredEnvironment(name) {
 }
 
 const binary = requiredEnvironment("CS_AGENT_MCP_BIN");
+const binaryArgs = process.env.CS_AGENT_MCP_BIN_ARGS
+  ? JSON.parse(process.env.CS_AGENT_MCP_BIN_ARGS)
+  : [];
+if (!Array.isArray(binaryArgs) || binaryArgs.some((argument) => typeof argument !== "string")) {
+  throw new Error("CS_AGENT_MCP_BIN_ARGS must be a JSON array of strings");
+}
 const mockAgent = requiredEnvironment("CS_AGENT_MCP_MOCK_AGENT");
 const home = await fs.mkdtemp(path.join(os.tmpdir(), "cs-agent-package-smoke-"));
 const workspace = path.join(home, "workspace");
@@ -56,9 +64,10 @@ await fs.writeFile(
 );
 
 async function runBinary(args) {
-  const child = spawn(binary, args, {
+  const child = spawn(binary, [...binaryArgs, ...args], {
     env: { ...getDefaultEnvironment(), HOME: home },
     stdio: ["ignore", "pipe", "pipe"],
+    ...packageCommandSpawnOptions(binary),
   });
   let stdout = "";
   let stderr = "";
@@ -82,7 +91,7 @@ try {
   await client.connect(
     new StdioClientTransport({
       command: binary,
-      args: ["--cwd", workspace],
+      args: [...binaryArgs, "--cwd", workspace],
       env: { ...getDefaultEnvironment(), HOME: home },
       stderr: "pipe",
     }),
@@ -115,14 +124,16 @@ try {
 
   const waited = await client.callTool(
     {
-      name: "cs_agent_wait_message",
-      arguments: { turnId, waitMs: 30_000 },
+      name: "cs_agent_wait_many",
+      arguments: { turnIds: [turnId], mode: "all", waitMs: 30_000 },
     },
     undefined,
     { timeout: 45_000 },
   );
-  assert.equal(waited.structuredContent?.result?.status, "message");
-  assert.equal(waited.structuredContent?.result?.message?.content, "package-smoke-ok");
+  assert.equal(waited.structuredContent?.result?.timedOut, false);
+  assert.deepEqual(waited.structuredContent?.result?.pendingTurnIds, []);
+  assert.equal(waited.structuredContent?.result?.ready?.[0]?.status, "message");
+  assert.equal(waited.structuredContent?.result?.ready?.[0]?.message?.content, "package-smoke-ok");
 
   const destroyed = await client.callTool({
     name: "cs_agent_destroy",
@@ -163,7 +174,7 @@ try {
   assert.match(agentsAttach.stdout, /"reason":"agent_destroyed"/);
 
   process.stdout.write(
-    `${JSON.stringify({ toolCount: tools.tools.length, lifecycle: "ok", diagnostics: "ok" })}\n`,
+    `${JSON.stringify({ toolCount: tools.tools.length, waitMany: "ok", lifecycle: "ok", diagnostics: "ok" })}\n`,
   );
 } finally {
   await client.close().catch(() => {});

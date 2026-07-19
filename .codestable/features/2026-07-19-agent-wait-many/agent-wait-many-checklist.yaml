@@ -1,0 +1,99 @@
+feature: 2026-07-19-agent-wait-many
+created: 2026-07-19
+
+steps:
+  - id: S1
+    action: "契约骨架：新增 Wait Many 类型、统一 MCP schema、运行时编排提示与 RED contract tests"
+    exit_signal: "cs_agent_wait_many 可发现，instructions 明示多 Turn fan-out/fan-in，输入边界和返回形状测试仅因批量语义尚未实现而失败"
+    status: done
+  - id: S2
+    action: "批量投影：实现原子可见性校验、有序 ready/pending、重复折叠和 timeout 结果"
+    exit_signal: "any 即时结果、空输入、重复、unknown/sibling 越权与 timeout 返回形状定向测试通过"
+    status: done
+  - id: S3
+    action: "并发等待：接通 store revision long-poll、权限短路与 waitAny/waitAll wrappers"
+    exit_signal: "all 的权限与 timeout 中断均可通过两轮等待累计完整结果，any 同轮收集多个 ready、wrappers 等价，且可计数 store 证明每轮只调用一次 waitForChange"
+    status: done
+  - id: S4
+    action: "发布契约：为 mock agent 增加文件 barrier，补齐 MCP SDK 并发 E2E；新增自包含 package:smoke:tarball wrapper 并让 CI 复用；更新 README、架构文档和 CHANGELOG"
+    exit_signal: "释放文件创建前两个 Turn 同时 running 的 fan-out/fan-in、权限响应续等 E2E、pnpm run check 和实际 tarball 14 tools/wait-many smoke 全部通过，定向测试记录非零通过数"
+    status: done
+
+checks:
+  - id: C01
+    item: "公开入口只有 cs_agent_wait_many，mode 为 any 或 all，默认 any"
+    source: "设计 0 术语约定 / 1 关键决策 1"
+    status: passed
+  - id: C02
+    item: "Facade waitMany、waitAny、waitAll 共享同一批量等待语义"
+    source: "设计 1 关键决策 1 / 2.1 名词层"
+    status: passed
+  - id: C03
+    item: "any 返回当前全部 ready 项，并按输入顺序提供仍需等待的 pendingTurnIds"
+    source: "设计 1 关键决策 4 / 场景 1"
+    status: passed
+  - id: C04
+    item: "all 是可中断等待：权限请求提前返回且保留在 pending，调用方按 Turn ID 跨轮累计 ready"
+    source: "设计 2.2 流程级约束 / 场景 3、9"
+    status: passed
+  - id: C05
+    item: "timeout 返回当前 ready/pending 和 retryAfterMs，不取消 Turn；续等 pending 后可累计完整结果"
+    source: "设计 2.2 流程级约束 / 场景 4、12"
+    status: passed
+  - id: C06
+    item: "重复 ID 首次顺序折叠；Facade 拒绝 raw 空/超 64，MCP 额外拒绝非法 UUID/mode/waitMs"
+    source: "设计场景 5"
+    status: passed
+  - id: C07
+    item: "全部 Turn 在投影前原子验证，不存在或不可见时整批失败且无部分泄漏"
+    source: "设计 1 关键决策 3 / 场景 6"
+    status: passed
+  - id: C08
+    item: "等待复用一个 store revision long-poll，不为每个 Turn 创建独立 waiter"
+    source: "设计 2.2 编排层 / 单 store waiter 场景"
+    status: passed
+  - id: C09
+    item: "MCP SDK 通过 mock-agent 文件 barrier，在释放文件创建前观察至少两个 Turn 同时 running，再用 wait_many fan-in"
+    source: "设计场景 8"
+    status: passed
+  - id: C10
+    item: "tools/list、capabilities 与 runtime instructions 稳定增加 wait-many；新增自包含 package:smoke:tarball，CI 复用且实际调用该工具"
+    source: "设计 2.3 挂载点 / 3.4 DoD Contract"
+    status: passed
+  - id: C11
+    item: "不新增 run、wait_any、wait_all 公开工具或 Host callback/outbox"
+    source: "设计 1 明确不做 / 3.2 反向核对"
+    status: passed
+  - id: C12
+    item: "单 Turn wait、events、Facade snapshot v1 与跨 Workspace权限行为保持兼容"
+    source: "设计 1 明确不做 / 场景 10"
+    status: passed
+
+dod:
+  commands:
+    - id: CMD-001
+      command: "pnpm run check"
+      core: true
+      failure_handling: fix-or-block
+    - id: CMD-002
+      command: "pnpm run package:smoke:tarball"
+      core: true
+      failure_handling: fix-or-block
+    - id: CMD-003
+      command: "pnpm run build:test && node --test dist-test/test/mcp-facade.test.js dist-test/test/mcp-e2e.test.js"
+      core: true
+      failure_handling: fix-or-block
+  evidence_required:
+    [
+      design_review,
+      implementation_evidence,
+      code_review,
+      qa,
+      acceptance,
+      command_output,
+      diff_summary,
+      sdk_e2e,
+      package_smoke,
+    ]
+  cleanliness:
+    debug_output: forbidden

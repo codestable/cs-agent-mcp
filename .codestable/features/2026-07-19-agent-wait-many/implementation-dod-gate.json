@@ -1,0 +1,20 @@
+{
+  "gate_id": "dod-contract-gate",
+  "stage": "implementation",
+  "status": "passed",
+  "blocking": [],
+  "warnings": [],
+  "evidence": [
+    {
+      "design": ".codestable/features/2026-07-19-agent-wait-many/agent-wait-many-design.md",
+      "checked_block": "DoD Contract",
+      "structure_checks": {
+        "validation command id": ["CMD-"],
+        "command core marker": ["core", "核心性"],
+        "failure handling marker": ["failure_handling", "失败处理"]
+      },
+      "strength": "minimal DoD Contract section check"
+    }
+  ],
+  "providers": {}
+}

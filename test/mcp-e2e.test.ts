@@ -34,6 +34,7 @@ const EXPECTED_TOOLS = [
   "cs_agent_send",
   "cs_agent_get_message",
   "cs_agent_wait_message",
+  "cs_agent_wait_many",
   "cs_agent_get_turn",
   "cs_agent_wait_turn",
   "cs_agent_respond_permission",
@@ -230,7 +231,7 @@ async function waitForStartedTurn(client: Client, agentId: string): Promise<stri
   throw new Error(`Timed out waiting for a started turn on ${agentId}`);
 }
 
-test("all 13 cs_agent tools complete a lifecycle through the cs-agent-mcp stdio entrypoint", async (t) => {
+test("all 14 cs_agent tools complete a lifecycle through the cs-agent-mcp stdio entrypoint", async (t) => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "cs-agent-mcp-e2e-"));
   const workspace = path.join(home, "workspace");
   await fs.mkdir(path.join(home, ".cs-agent-mcp"), { recursive: true });
@@ -488,8 +489,8 @@ test("all 13 cs_agent tools complete a lifecycle through the cs-agent-mcp stdio 
     name: "cs_agent_send",
     arguments: {
       agentId,
-      content: "sleep 5000",
-      idempotencyKey: "absolute-deadline",
+      content: "sleep 100",
+      idempotencyKey: "submission-timeout-only",
       timeoutMs: 50,
     },
   });
@@ -500,11 +501,10 @@ test("all 13 cs_agent tools complete a lifecycle through the cs-agent-mcp stdio 
     arguments: { turnId: timeoutReceipt.receipt.turnId, waitMs: 3_000 },
   });
   const timeoutResultContent = timeoutResult.structuredContent as {
-    result?: { status?: string; turn?: { state?: string; error?: { code?: string } } };
+    result?: { status?: string; message?: { content?: string } };
   };
-  assert.equal(timeoutResultContent.result?.status, "terminal_without_message");
-  assert.equal(timeoutResultContent.result.turn?.state, "failed");
-  assert.equal(timeoutResultContent.result.turn.error?.code, "TIMEOUT");
+  assert.equal(timeoutResultContent.result?.status, "message");
+  assert.equal(timeoutResultContent.result?.message?.content, "slept 100ms");
 
   const permissionSend = await client.callTool({
     name: "cs_agent_send",
@@ -621,6 +621,186 @@ test("all 13 cs_agent tools complete a lifecycle through the cs-agent-mcp stdio 
     status?: { agent?: { state?: string } };
   };
   assert.equal(finalStatusContent.status?.agent?.state, "destroyed");
+});
+
+test("wait many fans in concurrent ACP turns and resumes after permission", async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "cs-agent-mcp-wait-many-"));
+  const workspace = path.join(home, "workspace");
+  const releasePath = path.join(workspace, "release-wait-many");
+  await fs.mkdir(path.join(home, ".cs-agent-mcp"), { recursive: true });
+  await fs.mkdir(workspace, { recursive: true });
+  await fs.writeFile(
+    path.join(home, ".cs-agent-mcp", "config.json"),
+    JSON.stringify({
+      agents: {
+        codex: { command: process.execPath, args: [MOCK_AGENT_PATH, "--supports-load-session"] },
+        claude: { command: process.execPath, args: [MOCK_AGENT_PATH, "--supports-load-session"] },
+      },
+    }),
+  );
+  t.after(async () => await fs.rm(home, { recursive: true, force: true }));
+
+  const client = new Client({ name: "cs-agent-mcp-wait-many", version: "1.0.0" });
+  t.after(async () => await client.close());
+  await client.connect(
+    new StdioClientTransport({
+      command: process.execPath,
+      args: [CLI_PATH, "--cwd", workspace],
+      env: { ...getDefaultEnvironment(), HOME: home },
+      stderr: "pipe",
+    }),
+  );
+
+  const createdAgents = await Promise.all(
+    ["codex", "claude"].map(async (agent) => {
+      const created = await client.callTool({
+        name: "cs_agent_create",
+        arguments: { agent, name: `wait-many-${agent}` },
+      });
+      const content = created.structuredContent as { agent?: { agentId?: string } };
+      assert.ok(content.agent?.agentId);
+      return content.agent.agentId;
+    }),
+  );
+  const barrierTurns = await Promise.all(
+    createdAgents.map(async (agentId, index) => {
+      const sent = await client.callTool({
+        name: "cs_agent_send",
+        arguments: {
+          agentId,
+          content: `file-barrier ${JSON.stringify({ path: releasePath, result: `barrier-${index}` })}`,
+          idempotencyKey: `wait-many-barrier-${index}`,
+        },
+      });
+      const content = sent.structuredContent as { receipt?: { turnId?: string } };
+      assert.ok(content.receipt?.turnId);
+      return content.receipt.turnId;
+    }),
+  );
+
+  const running = await Promise.all(
+    barrierTurns.map(
+      async (turnId) => await waitForTurn(client, turnId, (turn) => turn.state === "running"),
+    ),
+  );
+  assert.deepEqual(
+    running.map((turn) => turn.state),
+    ["running", "running"],
+  );
+
+  const barrierWait = client.callTool(
+    {
+      name: "cs_agent_wait_many",
+      arguments: { turnIds: barrierTurns, mode: "all", waitMs: 30_000 },
+    },
+    undefined,
+    { timeout: 45_000 },
+  );
+  await fs.writeFile(releasePath, "release", "utf8");
+  const barrierResult = (await barrierWait).structuredContent as {
+    result?: {
+      ready?: Array<{
+        status?: string;
+        turn?: { turnId?: string };
+        message?: { content?: string };
+      }>;
+      pendingTurnIds?: string[];
+      timedOut?: boolean;
+    };
+  };
+  assert.equal(barrierResult.result?.timedOut, false);
+  assert.deepEqual(barrierResult.result?.pendingTurnIds, []);
+  assert.deepEqual(
+    barrierResult.result?.ready?.map((item) => ({
+      status: item.status,
+      turnId: item.turn?.turnId,
+      content: item.message?.content,
+    })),
+    [
+      { status: "message", turnId: barrierTurns[0], content: "barrier-0" },
+      { status: "message", turnId: barrierTurns[1], content: "barrier-1" },
+    ],
+  );
+
+  const permissionSend = await client.callTool({
+    name: "cs_agent_send",
+    arguments: {
+      agentId: createdAgents[0],
+      content: "permission edit wait-many permission",
+      idempotencyKey: "wait-many-permission",
+    },
+  });
+  const peerSend = await client.callTool({
+    name: "cs_agent_send",
+    arguments: {
+      agentId: createdAgents[1],
+      content: "echo wait-many-peer",
+      idempotencyKey: "wait-many-permission-peer",
+    },
+  });
+  const permissionTurnId = (permissionSend.structuredContent as { receipt?: { turnId?: string } })
+    .receipt?.turnId;
+  const peerTurnId = (peerSend.structuredContent as { receipt?: { turnId?: string } }).receipt
+    ?.turnId;
+  assert.ok(permissionTurnId);
+  assert.ok(peerTurnId);
+  await waitForTurn(client, peerTurnId, (turn) => turn.state === "completed");
+
+  const interrupted = await client.callTool({
+    name: "cs_agent_wait_many",
+    arguments: { turnIds: [permissionTurnId, peerTurnId], mode: "all", waitMs: 30_000 },
+  });
+  const interruptedContent = interrupted.structuredContent as {
+    result?: {
+      ready?: Array<{
+        status?: string;
+        turn?: { turnId?: string };
+        permission?: { permissionId?: string };
+      }>;
+      pendingTurnIds?: string[];
+    };
+  };
+  const action = interruptedContent.result?.ready?.find(
+    (item) => item.status === "action_required",
+  );
+  assert.equal(action?.turn?.turnId, permissionTurnId);
+  assert.ok(action.permission?.permissionId);
+  assert.deepEqual(interruptedContent.result?.pendingTurnIds, [permissionTurnId]);
+
+  await client.callTool({
+    name: "cs_agent_respond_permission",
+    arguments: { permissionId: action.permission.permissionId, outcome: "allow_once" },
+  });
+  const resumed = await client.callTool({
+    name: "cs_agent_wait_many",
+    arguments: {
+      turnIds: interruptedContent.result.pendingTurnIds,
+      mode: "all",
+      waitMs: 30_000,
+    },
+  });
+  const resumedContent = resumed.structuredContent as {
+    result?: { ready?: Array<{ status?: string; turn?: { turnId?: string } }> };
+  };
+  const accumulated = new Map(
+    [...(interruptedContent.result?.ready ?? []), ...(resumedContent.result?.ready ?? [])].map(
+      (item) => [item.turn?.turnId, item.status],
+    ),
+  );
+  assert.deepEqual(
+    [...accumulated.entries()],
+    [
+      [permissionTurnId, "message"],
+      [peerTurnId, "message"],
+    ],
+  );
+
+  for (const agentId of createdAgents) {
+    await client.callTool({
+      name: "cs_agent_destroy",
+      arguments: { agentId, discardSession: true },
+    });
+  }
 });
 
 test("a failed session discard leaves the managed agent recoverable", async (t) => {

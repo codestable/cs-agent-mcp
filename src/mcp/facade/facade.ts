@@ -26,8 +26,15 @@ import type {
   SendInput,
   SendReceipt,
   Turn,
+  WaitManyMode,
+  WaitManyResult,
   WaitMessageResult,
 } from "./types.js";
+import {
+  projectWaitMany,
+  type WaitManyProjection,
+  type WaitManyProjectionInput,
+} from "./wait-many.js";
 
 const DEFAULT_LIMITS: FacadeLimits = {
   maxDelegationDepth: 4,
@@ -200,6 +207,74 @@ function requireVisibleAgent(snapshot: FacadeSnapshot, actor: FacadeActor, agent
   return agent;
 }
 
+function validateWaitManyTurnIds(turnIds: string[]): string[] {
+  if (turnIds.length < 1 || turnIds.length > 64) {
+    throw new FacadeError("INVALID_ARGUMENT", "turnIds must contain between 1 and 64 entries");
+  }
+  return [...new Set(turnIds)];
+}
+
+function readTurnMessage(snapshot: FacadeSnapshot, turn: Turn): Message | undefined {
+  const message = turn.resultMessageId ? snapshot.messages[turn.resultMessageId] : undefined;
+  if (turn.resultMessageId && !message) {
+    throw new FacadeError("MESSAGE_NOT_FOUND", `Message ${turn.resultMessageId} was not found`);
+  }
+  return message;
+}
+
+function readPendingPermission(
+  snapshot: FacadeSnapshot,
+  turn: Turn,
+  terminal: boolean,
+): Permission | undefined {
+  const permission = turn.pendingPermissionId
+    ? snapshot.permissions[turn.pendingPermissionId]
+    : undefined;
+  if (turn.pendingPermissionId && !permission) {
+    throw new FacadeError(
+      "PERMISSION_NOT_FOUND",
+      `Permission ${turn.pendingPermissionId} was not found`,
+    );
+  }
+  return !terminal && permission?.state === "pending" ? permission : undefined;
+}
+
+function readWaitManyProjectionItem(
+  snapshot: FacadeSnapshot,
+  turnId: string,
+  actor: FacadeActor,
+): WaitManyProjectionInput {
+  const turn = snapshot.turns[turnId];
+  if (!turn) {
+    throw new FacadeError("TURN_NOT_FOUND", `Turn ${turnId} was not found`);
+  }
+  requireVisibleAgent(snapshot, actor, turn.agentId);
+  const terminal = isTerminalTurn(turn);
+  return {
+    turn,
+    message: readTurnMessage(snapshot, turn),
+    permission: readPendingPermission(snapshot, turn, terminal),
+    terminal,
+  };
+}
+
+function readWaitManyProjection(
+  snapshot: FacadeSnapshot,
+  turnIds: string[],
+  actor: FacadeActor,
+): WaitManyProjection {
+  const items = turnIds.map((turnId) => readWaitManyProjectionItem(snapshot, turnId, actor));
+  return projectWaitMany(items);
+}
+
+function isWaitManyComplete(projection: WaitManyProjection, mode: WaitManyMode): boolean {
+  return (
+    projection.hasActionRequired ||
+    (mode === "any" && projection.ready.length > 0) ||
+    (mode === "all" && projection.pendingTurnIds.length === 0)
+  );
+}
+
 function appendEvent(
   snapshot: FacadeSnapshot,
   input: Omit<FacadeEvent, "cursor" | "timestamp">,
@@ -251,14 +326,25 @@ function appendMutationAudit(
   );
 }
 
-function fingerprintSend(input: SendInput): string {
+const LEGACY_SEND_TIMEOUT_MAX_MS = 86_400_000;
+
+function isLegacySendTimeoutMs(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    value > 0 &&
+    value <= LEGACY_SEND_TIMEOUT_MAX_MS
+  );
+}
+
+function fingerprintSend(input: SendInput, legacyTimeoutMs?: number): string {
   return createHash("sha256")
     .update(
       JSON.stringify({
         agentId: input.agentId,
         content: input.content,
         attachments: input.attachments ?? [],
-        timeoutMs: input.timeoutMs,
+        ...(legacyTimeoutMs === undefined ? {} : { timeoutMs: legacyTimeoutMs }),
       }),
     )
     .digest("hex");
@@ -390,20 +476,59 @@ function shouldPreparePersistentDiscard(
   return discardSession === true && agent.mode === "persistent";
 }
 
+function hasValidLegacySendLinkage(
+  snapshot: FacadeSnapshot,
+  receipt: SendReceipt,
+  send: SendInput,
+  actor: FacadeActor,
+): boolean {
+  const turn = snapshot.turns[receipt.turnId];
+  const message = snapshot.messages[receipt.messageId];
+  if (!turn || !message) {
+    return false;
+  }
+  return [
+    isLegacySendTimeoutMs(turn.timeoutMs),
+    turn.turnId === receipt.turnId,
+    turn.rootExecutionId === actor.rootExecutionId,
+    turn.agentId === send.agentId,
+    turn.requestedByAgentId === actor.agentId,
+    turn.inputMessageId === receipt.messageId,
+    message.messageId === receipt.messageId,
+    message.rootExecutionId === actor.rootExecutionId,
+    message.direction === "inbound",
+    message.fromAgentId === actor.agentId,
+    message.toAgentId === send.agentId,
+    message.turnId === receipt.turnId,
+    message.content === send.content,
+    JSON.stringify(message.attachments ?? []) === JSON.stringify(send.attachments ?? []),
+  ].every(Boolean);
+}
+
 function existingSendReceipt(
   snapshot: FacadeSnapshot,
   idempotencyId: string,
   fingerprint: string,
+  send: SendInput,
+  actor: FacadeActor,
 ): SendReceipt | undefined {
   const existing = snapshot.idempotency[idempotencyId];
   if (!existing) {
     return undefined;
   }
   if (existing.fingerprint !== fingerprint) {
-    throw new FacadeError(
-      "IDEMPOTENCY_CONFLICT",
-      "idempotencyKey was already used with different input",
-    );
+    const legacyTurn = snapshot.turns[existing.receipt.turnId];
+    const legacyTimeoutMs = legacyTurn?.timeoutMs;
+    if (
+      !hasValidLegacySendLinkage(snapshot, existing.receipt, send, actor) ||
+      existing.fingerprint !== fingerprintSend(send, legacyTimeoutMs)
+    ) {
+      throw new FacadeError(
+        "IDEMPOTENCY_CONFLICT",
+        "idempotencyKey was already used with different input",
+      );
+    }
+    existing.fingerprint = fingerprint;
   }
   return existing.receipt;
 }
@@ -446,9 +571,6 @@ function createQueuedRecords(input: {
   if (parentTurnId) {
     turn.parentTurnId = parentTurnId;
   }
-  if (input.send.timeoutMs !== undefined) {
-    turn.timeoutMs = input.send.timeoutMs;
-  }
   return {
     message,
     turn,
@@ -472,7 +594,13 @@ function acceptSend(input: {
     throw new FacadeError("UNAUTHORIZED", "An agent cannot send a task to itself");
   }
   validateSendTarget(target);
-  const existing = existingSendReceipt(input.snapshot, input.idempotencyId, input.fingerprint);
+  const existing = existingSendReceipt(
+    input.snapshot,
+    input.idempotencyId,
+    input.fingerprint,
+    input.send,
+    input.actor,
+  );
   if (existing) {
     appendMutationAudit(
       input.snapshot,
@@ -1154,6 +1282,7 @@ export class MultiAgentFacade {
         "cs_agent_send",
         "cs_agent_get_message",
         "cs_agent_wait_message",
+        "cs_agent_wait_many",
         "cs_agent_get_turn",
         "cs_agent_wait_turn",
         "cs_agent_respond_permission",
@@ -1743,6 +1872,56 @@ export class MultiAgentFacade {
     }
   }
 
+  async waitMany(
+    input: { turnIds: string[]; mode?: WaitManyMode; waitMs?: number },
+    actor: FacadeActor,
+  ): Promise<WaitManyResult> {
+    this.assertOpen();
+    const mode = input.mode ?? "any";
+    const waitMs = Math.min(Math.max(input.waitMs ?? 0, 0), this.limits.maxWaitMs);
+    const deadline = this.now() + waitMs;
+    const turnIds = validateWaitManyTurnIds(input.turnIds);
+    while (true) {
+      const current = await this.options.store.read((snapshot) => ({
+        projection: readWaitManyProjection(snapshot, turnIds, actor),
+        revision: snapshot.revision,
+      }));
+      if (isWaitManyComplete(current.projection, mode)) {
+        return {
+          mode,
+          ready: current.projection.ready,
+          pendingTurnIds: current.projection.pendingTurnIds,
+          timedOut: false,
+        };
+      }
+      const remaining = deadline - this.now();
+      if (remaining <= 0) {
+        return {
+          mode,
+          ready: current.projection.ready,
+          pendingTurnIds: current.projection.pendingTurnIds,
+          timedOut: true,
+          retryAfterMs: Math.min(1_000, waitMs),
+        };
+      }
+      await this.options.store.waitForChange(current.revision, remaining);
+    }
+  }
+
+  async waitAny(
+    input: { turnIds: string[]; waitMs?: number },
+    actor: FacadeActor,
+  ): Promise<WaitManyResult> {
+    return await this.waitMany({ ...input, mode: "any" }, actor);
+  }
+
+  async waitAll(
+    input: { turnIds: string[]; waitMs?: number },
+    actor: FacadeActor,
+  ): Promise<WaitManyResult> {
+    return await this.waitMany({ ...input, mode: "all" }, actor);
+  }
+
   async events(input: EventsInput, actor: FacadeActor): Promise<EventsPage> {
     this.assertOpen();
     const waitMs = Math.min(Math.max(input.waitMs ?? 0, 0), this.limits.maxWaitMs);
@@ -2094,7 +2273,6 @@ export class MultiAgentFacade {
         text: message.content,
         ...(message.attachments ? { attachments: message.attachments } : {}),
         requestId: turn.turnId,
-        ...(turn.timeoutMs === undefined ? {} : { timeoutMs: turn.timeoutMs }),
       });
       this.activeRuntimeTurns.set(turn.turnId, runtimeTurn);
       const consumeEvents = async (): Promise<void> => {

@@ -3,7 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { parseSessionRecord } from "../../session/persistence/parse.js";
-import { projectConversation, type DiagnosticConversation } from "./conversation.js";
+import type { SessionRecord } from "../../types.js";
+import { projectConversations, type DiagnosticConversation } from "./conversation.js";
 export type { DiagnosticConversation, DiagnosticConversationItem } from "./conversation.js";
 import type {
   Agent,
@@ -308,6 +309,54 @@ export function createAgentDiagnostics(options: AgentDiagnosticsOptions = {}): A
     };
   }
 
+  async function conversationRecordPaths(agent: Agent): Promise<string[]> {
+    const recordId = `mcp-${agent.rootExecutionId}-${agent.agentId}`;
+    if (agent.mode === "persistent") {
+      return [path.join(sessionsDir, `${encodeURIComponent(recordId)}.json`)];
+    }
+    let entries: string[];
+    try {
+      entries = await fs.readdir(sessionsDir);
+    } catch (error) {
+      if (hasErrorCode(error, "ENOENT")) {
+        return [];
+      }
+      throw error;
+    }
+    const prefix = encodeURIComponent(`${recordId}:oneshot:`);
+    return entries
+      .filter((entry) => entry.startsWith(prefix) && entry.endsWith(".json"))
+      .toSorted()
+      .map((entry) => path.join(sessionsDir, entry));
+  }
+
+  async function readConversationRecord(
+    recordPath: string,
+    recordId: string,
+    mode: Agent["mode"],
+  ): Promise<SessionRecord | undefined> {
+    let raw: unknown;
+    try {
+      raw = await readJson(recordPath, readFile);
+    } catch (error) {
+      if (hasErrorCode(error, "ENOENT")) {
+        return undefined;
+      }
+      throw error;
+    }
+    return parseConversationRecord(raw, recordId, mode);
+  }
+
+  async function readConversationRecords(agent: Agent): Promise<SessionRecord[]> {
+    const recordId = `mcp-${agent.rootExecutionId}-${agent.agentId}`;
+    const records = await Promise.all(
+      (await conversationRecordPaths(agent)).map(
+        async (recordPath) => await readConversationRecord(recordPath, recordId, agent.mode),
+      ),
+    );
+    return records.filter((record): record is SessionRecord => record !== undefined);
+  }
+
   function listFromInstances(
     instances: ReadableInstance[],
     includeAll: boolean,
@@ -589,22 +638,8 @@ export function createAgentDiagnostics(options: AgentDiagnosticsOptions = {}): A
       if (agent.kind !== "managed") {
         return undefined;
       }
-      const recordId = `mcp-${agent.rootExecutionId}-${agent.agentId}`;
-      const recordPath = path.join(sessionsDir, `${encodeURIComponent(recordId)}.json`);
-      let raw: unknown;
-      try {
-        raw = await readJson(recordPath, readFile);
-      } catch (error) {
-        if (hasErrorCode(error, "ENOENT")) {
-          return undefined;
-        }
-        throw error;
-      }
-      const record = parseSessionRecord(raw);
-      if (!record || record.acpxRecordId !== recordId) {
-        throw new Error(`Invalid ACP session record for ${recordId}`);
-      }
-      return projectConversation(record);
+      const records = await readConversationRecords(agent);
+      return records.length > 0 ? projectConversations(records) : undefined;
     },
 
     async *attachAgent(selector: string, options = {}) {
@@ -648,6 +683,21 @@ async function readJson(
   readFile: (filePath: string) => Promise<string>,
 ): Promise<unknown> {
   return JSON.parse(await readFile(filePath));
+}
+
+function parseConversationRecord(
+  raw: unknown,
+  recordId: string,
+  mode: Agent["mode"],
+): SessionRecord {
+  const record = parseSessionRecord(raw);
+  const validRecordId =
+    record?.acpxRecordId === recordId ||
+    (mode === "oneshot" && record?.acpxRecordId.startsWith(`${recordId}:oneshot:`));
+  if (!record || !validRecordId) {
+    throw new Error(`Invalid ACP session record for ${recordId}`);
+  }
+  return record;
 }
 
 async function fileSignature(filePath: string): Promise<string> {

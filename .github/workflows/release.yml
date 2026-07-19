@@ -83,19 +83,7 @@ jobs:
         run: pnpm run check
 
       - name: 验证实际发布包
-        shell: bash
-        run: |
-          set -euo pipefail
-          package_file=$(npm pack --json --silent | node -e '
-            let input = "";
-            process.stdin.on("data", (chunk) => (input += chunk));
-            process.stdin.on("end", () => console.log(JSON.parse(input)[0].filename));
-          ')
-          install_root="${RUNNER_TEMP}/cs-agent-mcp-install"
-          npm install --prefix "${install_root}" "./${package_file}" --no-audit --no-fund
-          CS_AGENT_MCP_BIN="${install_root}/node_modules/.bin/cs-agent-mcp" \
-            CS_AGENT_MCP_MOCK_AGENT="${PWD}/dist-test/test/mock-agent.js" \
-            pnpm run package:smoke
+        run: pnpm run package:smoke:tarball
 
       - name: 检查版本是否已发布
         id: published

@@ -95,7 +95,7 @@ const SERVER_INSTRUCTIONS = `Use cs-agent-mcp when a task benefits from managed 
 
 For heterogeneous work, choose different configured agent names for complementary roles rather than assuming one runtime is universally best. Give each child a self-contained objective, scope, constraints, expected deliverable, and verification criteria. Agents can recursively delegate, but each caller can only see and control its own delegation subtree.
 
-Recommended workflow: cs_agent_capabilities -> cs_agent_create -> cs_agent_send -> cs_agent_wait_message. Use cs_agent_status, cs_agent_wait_turn, or cs_agent_events for progress and permission handling. Use cs_agent_cancel when work is obsolete, and cs_agent_destroy when the managed agent is no longer needed.`;
+Recommended workflow: cs_agent_capabilities -> cs_agent_create -> send all independent turns -> cs_agent_wait_many for multi-turn fan-in -> cs_agent_destroy. Use cs_agent_wait_message for one turn. When wait-many returns because of permission or timeout, accumulate ready items by turnId and continue with pendingTurnIds. Use cs_agent_status, cs_agent_wait_turn, or cs_agent_events for progress and permission handling. Use cs_agent_cancel when work is obsolete, and cs_agent_destroy when the managed agent is no longer needed.`;
 
 const READ_ONLY_ANNOTATIONS = {
   readOnlyHint: true,
@@ -307,7 +307,7 @@ export function createFacadeMcpServer(options: FacadeMcpServerOptions): McpServe
     "cs_agent_send",
     {
       description:
-        "Assign a self-contained task to a managed descendant agent. Include the objective, scope, constraints, expected deliverable, and verification criteria; the idempotency key makes retries safe.",
+        "Assign a self-contained task to a managed descendant agent. Include the objective, scope, constraints, expected deliverable, and verification criteria; the idempotency key makes retries safe. For parallel work, send all independent turns before waiting with cs_agent_wait_many.",
       inputSchema: z.object({
         agentId: z.string().uuid().describe("Target managed descendant agent id."),
         content: z
@@ -334,7 +334,9 @@ export function createFacadeMcpServer(options: FacadeMcpServerOptions): McpServe
           .int()
           .positive()
           .max(86_400_000)
-          .describe("Maximum time to accept and start the message, not a wait for task completion.")
+          .describe(
+            "Reserved submission-timeout hint kept for compatibility; it never limits task completion.",
+          )
           .optional(),
       }),
       annotations: {
@@ -373,7 +375,7 @@ export function createFacadeMcpServer(options: FacadeMcpServerOptions): McpServe
     "cs_agent_wait_message",
     {
       description:
-        "Preferred blocking wait after cs_agent_send. Returns a terminal reply, a permission request requiring cs_agent_respond_permission, a terminal turn without a reply, or a bounded timeout.",
+        "Preferred blocking wait after cs_agent_send for one turn. For multiple turns, send all independent turns first and use cs_agent_wait_many. Returns a terminal reply, a permission request requiring cs_agent_respond_permission, a terminal turn without a reply, or a bounded timeout.",
       inputSchema: z
         .object({
           turnId: z.string().uuid().describe("Turn id returned by cs_agent_send.").optional(),
@@ -406,6 +408,41 @@ export function createFacadeMcpServer(options: FacadeMcpServerOptions): McpServe
           result: await facade.waitMessage({ turnId, waitMs: input.waitMs }, actor),
         };
       }),
+  );
+
+  server.registerTool(
+    "cs_agent_wait_many",
+    {
+      description:
+        "Wait for multiple turns after you send all independent turns first. Mode any returns all currently ready items; mode all waits until every turn is terminal but returns early for permissions or timeout. Accumulate ready items by turnId and continue with pendingTurnIds after an interrupted all wait.",
+      inputSchema: z.object({
+        turnIds: z
+          .array(z.string().uuid())
+          .min(1)
+          .max(64)
+          .describe("Turn ids returned by cs_agent_send, from 1 to 64 entries."),
+        mode: z
+          .enum(["any", "all"])
+          .default("any")
+          .describe(
+            "any returns when at least one turn is ready; all waits for all terminal turns.",
+          ),
+        waitMs: z
+          .number()
+          .int()
+          .nonnegative()
+          .max(30_000)
+          .describe(
+            "Wait for at most this many milliseconds, up to 30000; timeout does not cancel turns.",
+          )
+          .optional(),
+      }),
+      annotations: READ_ONLY_ANNOTATIONS,
+    },
+    async (input) =>
+      await runTool(options, async ({ facade, actor }) => ({
+        result: await facade.waitMany(input, actor),
+      })),
   );
 
   server.registerTool(
