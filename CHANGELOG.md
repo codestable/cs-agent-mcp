@@ -2,6 +2,14 @@
 
 本文件记录 `cs-agent-mcp` 的用户可见变更。
 
+## 未发布
+
+### 受管 Claude 递归身份修复
+
+- 受管 Claude 现在会把用户配置中直接或通过常用 package-exec 命令启动 `cs-agent-mcp` 的 MCP
+  别名安全覆盖为当前 Agent 的 bearer loopback 入口，避免子 Agent 被错误创建为 sibling。
+- 其他 Claude 用户设置、skills、hooks、plugins 和无关 MCP 继续保留；用户配置不会被修改或复制。
+
 ## 0.2.5 - 2026-07-20
 
 ### Agent Wait Many

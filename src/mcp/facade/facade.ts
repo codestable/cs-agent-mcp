@@ -127,7 +127,7 @@ type MultiAgentFacadeOptions = {
   runtime: AgentRuntimeAdapter;
   rootExecutionId: string;
   allowedCwdRoots: string[];
-  mcpServersForToken: (token: string) => McpServer[];
+  mcpServersForToken: (token: string, agent: string) => McpServer[];
   limits?: Partial<FacadeLimits>;
   now?: () => number;
   createId?: () => string;
@@ -1458,7 +1458,7 @@ export class MultiAgentFacade {
           agent: agent.agent,
           cwd: runtimeCwd,
           mode: agent.mode,
-          mcpServers: this.options.mcpServersForToken(token),
+          mcpServers: this.options.mcpServersForToken(token, agent.agent),
           ...(agent.sessionOptions ? { sessionOptions: agent.sessionOptions } : {}),
         },
         {
@@ -2129,7 +2129,7 @@ export class MultiAgentFacade {
           agent: agent.agent,
           cwd: runtimeCwd,
           mode: agent.mode,
-          mcpServers: this.options.mcpServersForToken(token),
+          mcpServers: this.options.mcpServersForToken(token, agent.agent),
           requireExistingSession: agent.mode === "persistent",
           ...(agent.sessionOptions ? { sessionOptions: agent.sessionOptions } : {}),
         },
@@ -2192,7 +2192,7 @@ export class MultiAgentFacade {
           agent: agent.agent,
           cwd: runtimeCwd,
           mode: agent.mode,
-          mcpServers: this.options.mcpServersForToken(token),
+          mcpServers: this.options.mcpServersForToken(token, agent.agent),
           requireExistingSession: true,
           ...(agent.sessionOptions ? { sessionOptions: agent.sessionOptions } : {}),
         },

@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
+import { isClaudeAcpCommand } from "../../acp/agent-command.js";
+import { splitCommandLine } from "../../acp/client-process.js";
 import type { ResolvedAcpxConfig } from "../../cli/config.js";
 import { createAcpRuntime, createAgentRegistry, createRuntimeStore } from "../../runtime.js";
 import type { AcpRuntimeOptions } from "../../runtime.js";
@@ -8,6 +10,10 @@ import { MultiAgentFacade } from "../facade/facade.js";
 import { createFacadeIdentityIssuer } from "../facade/identity.js";
 import { createFileFacadeStore } from "../facade/store.js";
 import { createAcpxRuntimeAdapter } from "../runtime-adapter.js";
+import {
+  buildManagedIdentityMcpServers,
+  readClaudeControlPlaneMcpAliases,
+} from "./claude-user-mcp.js";
 import { startFacadeHttpServer } from "./http.js";
 import type { FacadeHttpServer } from "./http.js";
 import { acquireFacadeProcessLock, type FacadeProcessLock } from "./process-lock.js";
@@ -73,7 +79,12 @@ export async function startWorkspaceFacade(
     );
     const rootExecutionId = existingRootExecutionId ?? randomUUID();
     const identity = createFacadeIdentityIssuer({ store });
+    const claudeControlPlaneAliases = await readClaudeControlPlaneMcpAliases();
     const registry = createAgentRegistry({ overrides: options.config.agents });
+    const isClaudeManagedAgent = (agent: string): boolean => {
+      const { command, args } = splitCommandLine(registry.resolve(agent));
+      return isClaudeAcpCommand(command, args);
+    };
     const sessionStore = createRuntimeStore({ stateDir });
     const createConfiguredRuntime = (
       agentCwd: string,
@@ -117,15 +128,14 @@ export async function startWorkspaceFacade(
       runtime,
       rootExecutionId,
       allowedCwdRoots: workspace.allowedCwdRoots,
-      mcpServersForToken: (token) => [
-        ...options.config.mcpServers,
-        {
-          type: "http",
-          name: "cs-agent-mcp",
+      mcpServersForToken: (token, agent) =>
+        buildManagedIdentityMcpServers({
+          configuredServers: options.config.mcpServers,
+          aliases: claudeControlPlaneAliases,
+          includeClaudeAliases: isClaudeManagedAgent(agent),
           url: httpUrl,
-          headers: [{ name: "Authorization", value: `Bearer ${token}` }],
-        },
-      ],
+          token,
+        }),
     });
     httpServer = await startFacadeHttpServer({ facade, identity });
     httpUrl = httpServer.url;

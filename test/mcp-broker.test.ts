@@ -13,6 +13,10 @@ import {
   type BrokerDescriptor,
 } from "../src/mcp/broker/protocol.js";
 import { WorkspaceRegistry, type RegistryScheduler } from "../src/mcp/broker/registry.js";
+import {
+  buildManagedIdentityMcpServers,
+  readClaudeControlPlaneMcpAliases,
+} from "../src/mcp/transport/claude-user-mcp.js";
 import type { FacadeMcpContext } from "../src/mcp/transport/server.js";
 import { closeWorkspaceFacadeResources } from "../src/mcp/transport/workspace-facade.js";
 import type { RootWorkspace } from "../src/mcp/transport/workspace.js";
@@ -55,6 +59,170 @@ function workspace(...roots: string[]): RootWorkspace {
       : { requireExplicitCreateCwd: true as const }),
   };
 }
+
+test("Claude user MCP parsing finds only direct and package-exec cs-agent-mcp aliases", async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "cs-agent-mcp-claude-config-"));
+  t.after(async () => await fs.rm(home, { recursive: true, force: true }));
+  const configPath = path.join(home, ".claude.json");
+  await fs.writeFile(
+    configPath,
+    JSON.stringify({
+      mcpServers: {
+        direct: { command: "cs-agent-mcp" },
+        absolute: { command: "/opt/homebrew/bin/cs-agent-mcp" },
+        windows: { command: "C:\\Users\\example\\bin\\cs-agent-mcp.cmd" },
+        windowsPowerShell: {
+          command: "C:\\Users\\example\\AppData\\Roaming\\npm\\cs-agent-mcp.ps1",
+        },
+        npx: { command: "npx", args: ["-y", "cs-agent-mcp@latest"] },
+        npxPackage: {
+          command: "npx",
+          args: ["--package", "cs-agent-mcp@latest", "cs-agent-mcp"],
+        },
+        npm: { command: "npm", args: ["exec", "--yes", "cs-agent-mcp@0.2.5"] },
+        npmPackage: {
+          command: "npm",
+          args: ["--yes", "exec", "--package=cs-agent-mcp@0.2.5", "--", "cs-agent-mcp"],
+        },
+        npmLogLevel: {
+          command: "npm",
+          args: ["--loglevel", "warn", "exec", "cs-agent-mcp@latest"],
+        },
+        pnpm: { command: "pnpm", args: ["dlx", "cs-agent-mcp@next"] },
+        pnpmFlag: {
+          command: "pnpm",
+          args: ["--silent=false", "dlx", "cs-agent-mcp@next"],
+        },
+        pnpmWorkspaceRoot: {
+          command: "pnpm",
+          args: ["-w", "dlx", "cs-agent-mcp@latest"],
+        },
+        pnpmShellMode: {
+          command: "pnpm",
+          args: ["dlx", "-c", "cs-agent-mcp@latest"],
+        },
+        pnpmDirectory: {
+          command: "pnpm",
+          args: ["-C", "/workspace", "dlx", "cs-agent-mcp@latest"],
+        },
+        pnpmLongDirectory: {
+          command: "pnpm",
+          args: ["--dir", "/workspace", "dlx", "cs-agent-mcp@latest"],
+        },
+        pnpmStoreDirectory: {
+          command: "pnpm",
+          args: ["--store-dir", "/tmp/pnpm-store", "dlx", "cs-agent-mcp@latest"],
+        },
+        unrelated: { command: "codebase-memory-mcp" },
+        unrelatedPackage: {
+          command: "npx",
+          args: ["--package", "other-mcp", "other-mcp"],
+        },
+        npxArgumentOnly: {
+          command: "npx",
+          args: ["-y", "other-mcp", "cs-agent-mcp"],
+        },
+        npmArgumentOnly: {
+          command: "npm",
+          args: ["exec", "other-mcp", "--", "cs-agent-mcp"],
+        },
+        npmScriptNamedExec: {
+          command: "npm",
+          args: ["run", "exec", "--", "cs-agent-mcp"],
+        },
+        npmTagBeforeTarget: {
+          command: "npm",
+          args: ["exec", "--tag", "cs-agent-mcp", "other-mcp"],
+        },
+        npmUnknownOptionValue: {
+          command: "npm",
+          args: ["exec", "--future-option", "cs-agent-mcp", "other-mcp"],
+        },
+        pnpmArgumentOnly: {
+          command: "pnpm",
+          args: ["--store-dir", "/tmp/store", "dlx", "other-mcp", "--target", "cs-agent-mcp"],
+        },
+        pnpmScriptNamedDlx: {
+          command: "pnpm",
+          args: ["run", "dlx", "--", "cs-agent-mcp"],
+        },
+        http: { type: "http", url: "http://127.0.0.1:9999/mcp" },
+        wrapper: { command: "sh", args: ["-c", "cs-agent-mcp"] },
+        malformedArgs: { command: "npx", args: "cs-agent-mcp" },
+      },
+    }),
+  );
+
+  assert.deepEqual(await readClaudeControlPlaneMcpAliases(configPath), [
+    "direct",
+    "absolute",
+    "windows",
+    "windowsPowerShell",
+    "npx",
+    "npxPackage",
+    "npm",
+    "npmPackage",
+    "npmLogLevel",
+    "pnpm",
+    "pnpmFlag",
+    "pnpmWorkspaceRoot",
+    "pnpmShellMode",
+    "pnpmDirectory",
+    "pnpmLongDirectory",
+    "pnpmStoreDirectory",
+  ]);
+});
+
+test("Claude user MCP parsing fails open for missing or malformed configuration", async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "cs-agent-mcp-claude-invalid-"));
+  t.after(async () => await fs.rm(home, { recursive: true, force: true }));
+  const configPath = path.join(home, ".claude.json");
+
+  assert.deepEqual(await readClaudeControlPlaneMcpAliases(configPath), []);
+  await fs.writeFile(configPath, "not-json\n");
+  assert.deepEqual(await readClaudeControlPlaneMcpAliases(configPath), []);
+  await fs.writeFile(configPath, JSON.stringify({ mcpServers: [] }));
+  assert.deepEqual(await readClaudeControlPlaneMcpAliases(configPath), []);
+});
+
+test("managed identity MCP aliases override conflicting names without removing other servers", () => {
+  const servers = buildManagedIdentityMcpServers({
+    configuredServers: [
+      { name: "docs", command: "docs-mcp", args: [], env: [] },
+      { name: "cs-agent", command: "cs-agent-mcp", args: [], env: [] },
+    ],
+    aliases: ["cs-agent", "custom-control", "cs-agent-mcp", "cs-agent"],
+    includeClaudeAliases: true,
+    url: "http://127.0.0.1:4567/mcp",
+    token: "managed-token",
+  });
+
+  assert.equal(servers[0]?.name, "docs");
+  assert.equal(servers[1]?.name, "cs-agent");
+  assert.deepEqual(
+    servers.slice(2).map((server) => server.name),
+    ["cs-agent-mcp", "cs-agent", "custom-control"],
+  );
+  for (const server of servers.slice(2)) {
+    assert.deepEqual(server, {
+      type: "http",
+      name: server.name,
+      url: "http://127.0.0.1:4567/mcp",
+      headers: [{ name: "Authorization", value: "Bearer managed-token" }],
+    });
+  }
+
+  assert.deepEqual(
+    buildManagedIdentityMcpServers({
+      configuredServers: [],
+      aliases: ["cs-agent"],
+      includeClaudeAliases: false,
+      url: "http://127.0.0.1:4567/mcp",
+      token: "managed-token",
+    }).map((server) => server.name),
+    ["cs-agent-mcp"],
+  );
+});
 
 test("broker descriptor is atomically published as a private machine-level record", async (t) => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "cs-agent-mcp-broker-protocol-"));

@@ -68,6 +68,13 @@ claude mcp add --scope user cs-agent -- npx -y cs-agent-mcp@latest
 时，如果对应 ACP 适配器尚未缓存，npm 可能下载适配器及其 SDK。这只是本地协议桥，不是重新
 安装 Claude/Codex，也不需要手工配置适配器路径、端口或令牌。
 
+受管 Claude 仍会保留用户的 skills、hooks、plugins 和无关 MCP。若 Claude 用户配置中存在
+直接或通过 `npx`、`npm exec`、`pnpm dlx` 启动 `cs-agent-mcp` 的 MCP 名称，服务会在受管
+session 中用同名的身份受限 loopback 入口覆盖它，避免递归委派误用 Workspace root 身份。
+Claude 用户配置不会被修改或复制；配置变更会在对应 Workspace 控制面重启后重新读取。
+当前自动覆盖范围是 `~/.claude.json` 顶层的 user-scope MCP；不要在项目 `.mcp.json` 或 Claude
+local/project scope 另外注册指向 `cs-agent-mcp` 的 root 控制面，以免重新引入身份冲突。
+
 ## 支持的 Agent
 
 | 支持级别     | Agent                                                                                                                                                                 | 说明                                                                 |
