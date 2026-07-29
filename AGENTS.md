@@ -13,7 +13,7 @@
 ## 环境
 
 - Node.js `>=22.13.0`
-- pnpm `10.33.2`
+- pnpm `10.34.5`
 
 ```bash
 pnpm install

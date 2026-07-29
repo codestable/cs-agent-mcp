@@ -157,6 +157,48 @@ test("AcpRuntimeManager reuses compatible records without spawning a new client"
   assert.equal(store.savedRecordIds.length, 1);
 });
 
+test("AcpRuntimeManager migrates a legacy built-in adapter command when resuming", async () => {
+  const currentCommand = "npx -y @agentclientprotocol/codex-acp@^1.1.5";
+  const existing = makeSessionRecord({
+    acpxRecordId: "legacy-codex-session",
+    acpSessionId: "sid-legacy-codex",
+    agentCommand: "npx -y @agentclientprotocol/codex-acp@^0.0.44",
+    cwd: "/workspace",
+    closed: true,
+  });
+  const store = new InMemorySessionStore([existing]);
+  let constructed = 0;
+  const manager = new AcpRuntimeManager(
+    createRuntimeOptions({
+      cwd: "/workspace",
+      sessionStore: store,
+      agentRegistry: {
+        resolve: () => currentCommand,
+        list: () => ["codex"],
+      },
+    }),
+    {
+      clientFactory: () => {
+        constructed += 1;
+        throw new Error("clientFactory should not be called");
+      },
+    },
+  );
+
+  const record = await manager.ensureSession({
+    sessionKey: existing.acpxRecordId,
+    agent: "codex",
+    mode: "persistent",
+    cwd: "/workspace",
+    requireExistingSession: true,
+  });
+
+  assert.equal(constructed, 0);
+  assert.equal(record.acpSessionId, existing.acpSessionId);
+  assert.equal(record.agentCommand, currentCommand);
+  assert.equal(store.records.get(existing.acpxRecordId)?.agentCommand, currentCommand);
+});
+
 test("AcpRuntimeManager refuses to create a fresh persistent session when resume is required", async () => {
   const store = new InMemorySessionStore();
   let constructed = 0;

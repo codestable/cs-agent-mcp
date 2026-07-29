@@ -790,6 +790,7 @@ export class AcpRuntimeManager {
     ) {
       return undefined;
     }
+    existing.agentCommand = agentCommand;
     existing.closed = false;
     existing.closedAt = undefined;
     this.closingActiveRecords.delete(existing.acpxRecordId);

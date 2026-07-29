@@ -9,10 +9,11 @@ import {
   resolveClaudeCodeExecutable,
   resolveCodexExecutable,
 } from "../src/acp/agent-command.js";
+import { areCompatibleBuiltInAgentCommands } from "../src/acp/builtin-command-migration.js";
 import { resolveAgentSessionCwd } from "../src/acp/client-process.js";
 import { AcpClient, buildAgentSpawnOptions, buildSpawnCommandOptions } from "../src/acp/client.js";
 import { buildTerminalSpawnOptions } from "../src/acp/terminal-manager.js";
-import { AGENT_REGISTRY } from "../src/agent-registry.js";
+import { AGENT_REGISTRY, BUILT_IN_AGENT_PACKAGES } from "../src/agent-registry.js";
 import { buildQueueOwnerSpawnOptions } from "../src/cli/session/queue-owner-process.js";
 import {
   buildTerminalShellSpawnCommand,
@@ -38,10 +39,53 @@ test("built-in registry preserves the generic ACP runtime surface", () => {
     "kiro",
     "mux",
     "opencode",
+    "pool",
     "qoder",
     "qwen",
     "trae",
+    "zeroclaw",
   ]);
+});
+
+test("built-in registry tracks the acpx v0.13.0 adapter and native ACP commands", () => {
+  assert.equal(AGENT_REGISTRY.pi, "npx pi-acp@^0.0.31");
+  assert.equal(AGENT_REGISTRY.codex, "npx -y @agentclientprotocol/codex-acp@^1.1.5");
+  assert.equal(AGENT_REGISTRY.claude, "npx -y @agentclientprotocol/claude-agent-acp@^0.60.0");
+  assert.equal(AGENT_REGISTRY.mux, "npx -y mux@^0.28.0 acp");
+  assert.equal(AGENT_REGISTRY.pool, "pool acp");
+  assert.equal(AGENT_REGISTRY.zeroclaw, "zeroclaw acp");
+  assert.equal(BUILT_IN_AGENT_PACKAGES.codex.packageRange, "^1.1.5");
+  assert.equal(BUILT_IN_AGENT_PACKAGES.claude.packageRange, "^0.60.0");
+});
+
+test("known legacy adapter commands migrate only within the same built-in agent", () => {
+  assert.equal(areCompatibleBuiltInAgentCommands("npx pi-acp@^0.0.26", AGENT_REGISTRY.pi), true);
+  assert.equal(
+    areCompatibleBuiltInAgentCommands(
+      "npx -y @agentclientprotocol/codex-acp@^0.0.44",
+      AGENT_REGISTRY.codex,
+    ),
+    true,
+  );
+  assert.equal(
+    areCompatibleBuiltInAgentCommands(
+      "npm exec @agentclientprotocol/claude-agent-acp@^0.37.0",
+      AGENT_REGISTRY.claude,
+    ),
+    true,
+  );
+  assert.equal(
+    areCompatibleBuiltInAgentCommands("npx -y mux@^0.27.0 acp", AGENT_REGISTRY.mux),
+    true,
+  );
+  assert.equal(
+    areCompatibleBuiltInAgentCommands(
+      "npx -y @agentclientprotocol/codex-acp@^0.0.44",
+      AGENT_REGISTRY.claude,
+    ),
+    false,
+  );
+  assert.equal(areCompatibleBuiltInAgentCommands("custom-acp", "custom-acp-v2"), false);
 });
 
 test("Claude session timeout remediation points to the MCP workflow", () => {

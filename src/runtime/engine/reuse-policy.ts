@@ -1,4 +1,5 @@
 import path from "node:path";
+import { areCompatibleBuiltInAgentCommands } from "../../acp/builtin-command-migration.js";
 import type { SessionRecord } from "../../types.js";
 
 export function shouldReuseExistingRecord(
@@ -15,7 +16,10 @@ export function shouldReuseExistingRecord(
   if (path.resolve(record.cwd) !== path.resolve(params.cwd)) {
     return false;
   }
-  if (record.agentCommand !== params.agentCommand) {
+  if (
+    record.agentCommand !== params.agentCommand &&
+    !areCompatibleBuiltInAgentCommands(record.agentCommand, params.agentCommand)
+  ) {
     return false;
   }
   if (params.resumeSessionId && record.acpSessionId !== params.resumeSessionId) {

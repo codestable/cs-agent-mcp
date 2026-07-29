@@ -77,15 +77,19 @@ local/project scope 另外注册指向 `cs-agent-mcp` 的 root 控制面，以�
 
 ## 支持的 Agent
 
-| 支持级别     | Agent                                                                                                                                                                 | 说明                                                                 |
-| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| 重点实机支持 | `codex`、`claude`                                                                                                                                                     | 内置 ACP 适配器，并在发布验证中使用本机登录状态执行真实任务          |
-| ACP 兼容支持 | `pi`、`openclaw`、`gemini`、`cursor`、`copilot`、`droid`、`fast-agent`、`grok-build`、`iflow`、`kilocode`、`kimi`、`kiro`、`mux`、`opencode`、`qoder`、`qwen`、`trae` | 内置命令映射和通用 ACP client/runtime 测试通过；可用性取决于本机环境 |
+| 支持级别     | Agent                                                                                                                                                                                     | 说明                                                                 |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| 重点实机支持 | `codex`、`claude`                                                                                                                                                                         | 内置 ACP 适配器，并在发布验证中使用本机登录状态执行真实任务          |
+| ACP 兼容支持 | `pi`、`openclaw`、`gemini`、`cursor`、`copilot`、`droid`、`fast-agent`、`grok-build`、`iflow`、`kilocode`、`kimi`、`kiro`、`mux`、`opencode`、`pool`、`qoder`、`qwen`、`trae`、`zeroclaw` | 内置命令映射和通用 ACP client/runtime 测试通过；可用性取决于本机环境 |
 
 “ACP 兼容支持”不是仅供展示的候选映射。这些 Agent 与 Codex、Claude 共用 Agent 创建和销毁、
 持久或 oneshot 会话、消息与 Turn、权限回传、取消、事件、批量等待和 Workspace 共享控制面。
 例如 `pi` 通过 `pi-acp` 启动，`openclaw` 使用原生 `openclaw acp`，`gemini` 使用原生 ACP 模式。
 不同支持级别的区别是发布门禁的实机覆盖范围，不是 MCP 编排能力不同。
+
+`pool` 使用本机 `pool acp`，需要先安装 Pool CLI 并完成登录。`zeroclaw` 使用本机
+`zeroclaw acp`；ZeroClaw 默认可能忽略 `session/new` 传入的 MCP servers，只有对应 Agent 配置启用
+ACP MCP 后才能使用递归委派，因此不能仅凭 initialize 成功推断其子 Agent 能力。
 
 建议先调用 `cs_agent_capabilities` 并通过 `probeAgents` 探测准备使用的 Agent。探测会真实启动对应
 ACP server 并完成 initialize 握手，而不只是检查命令名称。也可以在 `agents` 配置中新增或覆盖

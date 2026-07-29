@@ -4,6 +4,19 @@
 
 ## 未发布
 
+## 0.3.0 - 2026-07-29
+
+### ACP v0.13.0 上游同步
+
+- 内置 adapter 范围同步到稳定版 `acpx v0.13.0`：Pi `^0.0.31`、Codex `^1.1.5`、Claude
+  `^0.60.0`、Mux `^0.28.0`；新增 Pool (`pool acp`) 和 ZeroClaw (`zeroclaw acp`) 命令映射。
+- 升级前由旧内置 adapter 命令创建的持久会话，会在恢复时按同一 Agent 的显式迁移表更新为当前
+  命令；未知自定义命令和跨 Agent 命令仍按不兼容处理，保持恢复 fail-closed。
+- ACP SDK 升级到 `1.3.0`，MCP SDK 升级到 `1.30.0`；生产依赖固定使用已修复的
+  `fast-uri 3.1.4` 与 `@hono/node-server 2.0.12`，消除已知 high/moderate 审计告警。
+- 本次不引入上游 Windows structured argv、filesystem capability opt-out、CLI queue/flow/timer
+  行为，保持 14 tools、Facade snapshot v1、Workspace owner 和受管 Agent 权限边界不变。
+
 ### 受管 Claude 递归身份修复
 
 - 受管 Claude 现在会把用户配置中直接或通过常用 package-exec 命令启动 `cs-agent-mcp` 的 MCP

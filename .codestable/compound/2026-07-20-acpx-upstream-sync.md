@@ -3,7 +3,8 @@
 ## 背景
 
 `cs-agent-mcp` 自带 ACP client/runtime，不把 `acpx` 作为运行时依赖。当前 Agent registry 与
-`acpx@0.12.0` 对应实现一致，但 ACP client、session 和 runtime 已叠加本项目需要的 Codex/Claude
+`acpx@0.13.0` 对应的高优先级 registry 与依赖更新已于 2026-07-29 语义移植，但 ACP client、session
+和 runtime 仍叠加本项目需要的 Codex/Claude
 本机路径解析、Claude 设置隔离、递归 MCP 注入、持久会话 fail-closed、prompt timeout 完整性和
 `cs-agent-mcp` 日志语义。后续吸收 upstream 修复时，目标是复用通用 ACP 兼容改进，而不是重新
 引入 acpx CLI 产品面或覆盖本项目的 MCP 控制面。
