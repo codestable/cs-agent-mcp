@@ -241,9 +241,11 @@ Broker 内唯一的 Facade/runtime owner。最后一个前端离开后，Broker 
 发送任务时也必须使用不同的键。兼容字段 `timeoutMs` 不限制 Agent 任务执行时间；调用方应通过
 等待、取消和 `maxTurns` 管理任务，而不是按预估耗时设置 Turn deadline。
 
-`maxTurns` 限制的是一个任务在 Agent 内部可使用的 agentic turns，不是 Facade Turn 数量。代码
-审查等工具调用较多的任务通常需要 `8-12`；没有严格预算时建议省略并使用适配器默认值。达到
-上限时 Turn 会保持 `failed`，返回 `MAX_TURNS_EXCEEDED`，且不会自动提高限制或重试任务。
+`maxTurns` 是一个任务在 Agent 内部可使用的 agentic turns 硬上限，不是 Facade Turn 数量、
+超时时间或递归委派深度。普通代码实现、审查、调试和工具调用较多的任务应省略该字段，使用适配器
+默认行为；只有调用方需要严格预算并接受达到上限即失败时才应设置。不同适配器的支持范围和计数
+方式可能不同，不要根据预估任务时长自动猜测较小值。达到上限时 Turn 会保持 `failed`，返回
+`MAX_TURNS_EXCEEDED`，且不会自动提高限制或重试任务。
 
 `persistent` 模式要求服务重启后恢复原 ACP 会话，无法恢复时明确失败；`oneshot` 模式允许
 底层运行时在原会话不可用时建立新会话，因此不承诺跨重连保留上下文。两种模式下的 Facade

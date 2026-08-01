@@ -85,8 +85,10 @@ const sessionOptionsSchema = z.object({
     .positive()
     .max(10_000)
     .describe(
-      "Maximum agentic turns for one task, not the number of Facade Turns. " +
-        "Tool-heavy tasks often need 8-12; omit this field to use the agent adapter default.",
+      "Optional hard limit on internal agentic turns for one task, not a Facade Turn count, " +
+        "timeout, or delegation-depth limit. Omit for normal coding, review, debugging, and " +
+        "tool-heavy work. Set only when a strict budget is required and failure at the limit " +
+        "is acceptable; adapter support and turn accounting may vary.",
     )
     .optional(),
 });
@@ -94,6 +96,8 @@ const sessionOptionsSchema = z.object({
 const SERVER_INSTRUCTIONS = `Use cs-agent-mcp when a task benefits from managed delegation: independent parallelizable subtasks, heterogeneous agent runtimes, specialized roles, independent implementation and review, or long-running work that the caller should coordinate. Do not delegate trivial or tightly coupled work that the caller can complete directly.
 
 For heterogeneous work, choose different configured agent names for complementary roles rather than assuming one runtime is universally best. Give each child a self-contained objective, scope, constraints, expected deliverable, and verification criteria. Agents can recursively delegate, but each caller can only see and control its own delegation subtree.
+
+By default, omit sessionOptions.maxTurns for normal coding, review, debugging, and tool-heavy work. Set it only when a strict budget is required and failure at the limit is acceptable; never infer a small value from expected task duration.
 
 Recommended workflow: cs_agent_capabilities -> cs_agent_create -> send all independent turns -> cs_agent_wait_many for multi-turn fan-in -> cs_agent_destroy. Use cs_agent_wait_message for one turn. When wait-many returns because of permission or timeout, accumulate ready items by turnId and continue with pendingTurnIds. Use cs_agent_status, cs_agent_wait_turn, or cs_agent_events for progress and permission handling. Use cs_agent_cancel when work is obsolete, and cs_agent_destroy when the managed agent is no longer needed.`;
 

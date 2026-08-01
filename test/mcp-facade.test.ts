@@ -1785,6 +1785,14 @@ test("MCP server exposes all facade tools and returns structured create results"
   assert.match(instructions, /do not delegate trivial or tightly coupled work/i);
   assert.match(
     instructions,
+    /omit sessionOptions\.maxTurns for normal coding, review, debugging, and tool-heavy work/i,
+  );
+  assert.match(
+    instructions,
+    /set it only when a strict budget is required and failure at the limit is acceptable/i,
+  );
+  assert.match(
+    instructions,
     /cs_agent_capabilities.*cs_agent_create.*send all independent turns.*cs_agent_wait_many.*cs_agent_destroy/is,
   );
   assert.deepEqual(

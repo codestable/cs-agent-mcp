@@ -571,8 +571,11 @@ test("cs-agent-mcp serves the facade over stdio", async (t) => {
   const maxTurnsDescription =
     createSchema.properties?.sessionOptions?.properties?.maxTurns?.description ?? "";
   assert.match(maxTurnsDescription, /agentic turns/);
-  assert.match(maxTurnsDescription, /8-12/);
-  assert.match(maxTurnsDescription, /omit/);
+  assert.match(maxTurnsDescription, /hard limit/i);
+  assert.match(maxTurnsDescription, /omit.*normal coding.*review.*debugging.*tool-heavy/i);
+  assert.match(maxTurnsDescription, /strict budget/i);
+  assert.match(maxTurnsDescription, /failure at the limit is acceptable/i);
+  assert.doesNotMatch(maxTurnsDescription, /8-12/);
   const waitManyTool = tools.tools.find((tool) => tool.name === "cs_agent_wait_many");
   const waitManySchema = waitManyTool?.inputSchema as {
     properties?: {
