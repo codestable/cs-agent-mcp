@@ -7,6 +7,7 @@ import type {
   AcpRuntimeTurnAttachment,
   AcpRuntimeTurnResult,
   AcpRuntimeSessionMode,
+  AcpRuntimeSessionPolicy,
   SessionAgentOptions,
 } from "../../runtime.js";
 
@@ -62,6 +63,7 @@ export type Agent = {
   updatedAt: string;
   lastError?: FacadeErrorShape;
   sessionOptions?: SessionAgentOptions;
+  runtimePolicy?: AcpRuntimeSessionPolicy;
 };
 
 export type Turn = {
@@ -156,6 +158,13 @@ export type IdempotencyReceipt = {
   receipt: SendReceipt;
 };
 
+/** Persisted result for an atomic structured run. Optional for v1 snapshot compatibility. */
+export type StructuredIdempotencyReceipt = {
+  fingerprint: string;
+  operationId: string;
+  result: unknown;
+};
+
 export type IdentityRecord = {
   tokenHash: string;
   actor: FacadeActor;
@@ -174,6 +183,8 @@ export type FacadeSnapshot = {
   permissions: Record<string, Permission>;
   events: FacadeEvent[];
   idempotency: Record<string, IdempotencyReceipt>;
+  /** Added as an optional extension so existing facade.v1 snapshots remain readable. */
+  structuredIdempotency?: Record<string, StructuredIdempotencyReceipt>;
   identities: Record<string, IdentityRecord>;
 };
 
@@ -199,6 +210,7 @@ export type EnsureRuntimeAgentInput = {
   mcpServers: McpServer[];
   requireExistingSession?: boolean;
   sessionOptions?: SessionAgentOptions;
+  runtimePolicy?: AcpRuntimeSessionPolicy;
 };
 
 export type RuntimeAgentHooks = {
@@ -241,6 +253,7 @@ export type CreateAgentInput = {
   cwd?: string;
   mode?: AcpRuntimeSessionMode;
   sessionOptions?: SessionAgentOptions;
+  runtimePolicy?: AcpRuntimeSessionPolicy;
 };
 
 export type SendInput = {

@@ -153,6 +153,30 @@ test("buildAgentSpawnOptions leaves the agent env untouched when no session env 
   assert.equal(options.env.ACPX_TEST_SESSION_ENV_INJECTED, undefined);
 });
 
+test("buildAgentSpawnOptions can fail closed to PATH plus explicit session inputs", () => {
+  const inheritedKey = "ACPX_TEST_INHERITED_ONLY";
+  const previous = process.env[inheritedKey];
+  process.env[inheritedKey] = "must-not-leak";
+  try {
+    const options = buildAgentSpawnOptions(
+      "/tmp/acpx-agent",
+      { "api-token": "explicit-secret" },
+      { ACPX_TEST_SESSION_ONLY: "session-value" },
+      false,
+    );
+    assert.equal(options.env[inheritedKey], undefined);
+    assert.equal(options.env.PATH, process.env.PATH ?? "");
+    assert.equal(options.env.ACPX_AUTH_API_TOKEN, "explicit-secret");
+    assert.equal(options.env.ACPX_TEST_SESSION_ONLY, "session-value");
+  } finally {
+    if (previous === undefined) {
+      delete process.env[inheritedKey];
+    } else {
+      process.env[inheritedKey] = previous;
+    }
+  }
+});
+
 test("spawned agent child process receives session env with parent-override precedence", async () => {
   const script =
     "process.stdout.write(JSON.stringify({injected:process.env.ACPX_TEST_E2E_INJECTED,parent:process.env.ACPX_TEST_E2E_PARENT}))";
@@ -330,6 +354,30 @@ test("buildTerminalSpawnOptions hides Windows console windows and maps env entri
   assert.equal(options.windowsHide, true);
   assert.equal(options.env?.TMUX, "/tmp/tmux-1000/default,123,0");
   assert.equal(options.env?.TERM, "screen-256color");
+});
+
+test("buildTerminalSpawnOptions keeps only PATH when environment inheritance is disabled", () => {
+  const previousSecret = process.env.CS_AGENT_MCP_TERMINAL_SECRET;
+  process.env.CS_AGENT_MCP_TERMINAL_SECRET = "must-not-leak";
+  try {
+    const options = buildTerminalSpawnOptions(
+      "node",
+      "/tmp/acpx-terminal",
+      [{ name: "EXPLICIT_TERMINAL_VALUE", value: "allowed" }],
+      process.platform,
+      false,
+    );
+
+    assert.equal(options.env?.PATH, process.env.PATH ?? "");
+    assert.equal(options.env?.EXPLICIT_TERMINAL_VALUE, "allowed");
+    assert.equal(options.env?.CS_AGENT_MCP_TERMINAL_SECRET, undefined);
+  } finally {
+    if (previousSecret === undefined) {
+      delete process.env.CS_AGENT_MCP_TERMINAL_SECRET;
+    } else {
+      process.env.CS_AGENT_MCP_TERMINAL_SECRET = previousSecret;
+    }
+  }
 });
 
 test("buildQueueOwnerSpawnOptions hides Windows console windows and passes payload path", () => {

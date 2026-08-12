@@ -108,8 +108,9 @@ export function createInMemoryFacadeStore(
   return createFacadeStore(initial);
 }
 
+// oxlint-disable-next-line complexity -- validates the persisted v1 envelope and optional extension together
 function parseFacadeSnapshot(value: unknown): FacadeSnapshot {
-  if (typeof value !== "object" || value === null) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error("Invalid cs-agent-mcp facade store snapshot");
   }
   const record = value as Record<string, unknown>;
@@ -117,14 +118,37 @@ function parseFacadeSnapshot(value: unknown): FacadeSnapshot {
   const hasInvalidObject = objectKeys.some(
     (key) => typeof record[key] !== "object" || record[key] === null || Array.isArray(record[key]),
   );
-  if (
-    record.schema !== "cs-agent-mcp.facade.v1" ||
-    typeof record.revision !== "number" ||
-    typeof record.nextCursor !== "number" ||
-    !Array.isArray(record.events) ||
-    hasInvalidObject
-  ) {
+  const structuredReceiptsValid =
+    record.structuredIdempotency === undefined ||
+    (typeof record.structuredIdempotency === "object" &&
+      record.structuredIdempotency !== null &&
+      !Array.isArray(record.structuredIdempotency));
+  const valid =
+    record.schema === "cs-agent-mcp.facade.v1" &&
+    typeof record.revision === "number" &&
+    typeof record.nextCursor === "number" &&
+    Array.isArray(record.events) &&
+    !hasInvalidObject &&
+    structuredReceiptsValid;
+  if (!valid) {
     throw new Error("Invalid cs-agent-mcp facade store snapshot");
+  }
+  for (const [key, receipt] of Object.entries(record.structuredIdempotency ?? {})) {
+    if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)) {
+      throw new Error(`Invalid structured idempotency receipt: ${key}`);
+    }
+    const receiptRecord = receipt as Record<string, unknown>;
+    const fingerprint = receiptRecord.fingerprint;
+    const operationId = receiptRecord.operationId;
+    if (
+      typeof fingerprint !== "string" ||
+      fingerprint.length === 0 ||
+      typeof operationId !== "string" ||
+      operationId.length === 0 ||
+      !Object.hasOwn(receiptRecord, "result")
+    ) {
+      throw new Error(`Invalid structured idempotency receipt: ${key}`);
+    }
   }
   return value as FacadeSnapshot;
 }

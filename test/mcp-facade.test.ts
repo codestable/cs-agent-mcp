@@ -131,20 +131,49 @@ class ControlledAgentRuntime extends FakeAgentRuntime {
   readonly completions: Array<(result: AcpRuntimeTurnResult) => void> = [];
   readonly cancellations: string[] = [];
 
+  constructor(private readonly completionOutput?: string) {
+    super();
+  }
+
   override startTurn(input: StartRuntimeTurnInput): RuntimeTurn {
     this.started.push(input);
+    const completionOutput = this.completionOutput;
     let complete: ((result: AcpRuntimeTurnResult) => void) | undefined;
     const result = new Promise<AcpRuntimeTurnResult>((resolve) => {
       complete = resolve;
     });
     this.completions.push((value) => complete?.(value));
     return {
-      events: (async function* (): AsyncIterable<AcpRuntimeEvent> {})(),
+      events: (async function* (): AsyncIterable<AcpRuntimeEvent> {
+        if (completionOutput) {
+          yield { type: "text_delta", text: completionOutput, stream: "output" };
+        }
+      })(),
       result,
       cancel: async () => {
         this.cancellations.push(input.requestId);
         complete?.({ status: "cancelled", stopReason: "cancelled" });
       },
+    };
+  }
+}
+
+class StructuredOutputAgentRuntime extends FakeAgentRuntime {
+  constructor(private readonly outputs: string[]) {
+    super();
+  }
+
+  override startTurn(input: StartRuntimeTurnInput): RuntimeTurn {
+    this.started.push(input);
+    const output = this.outputs.shift() ?? "";
+    return {
+      events: (async function* (): AsyncIterable<AcpRuntimeEvent> {
+        if (output) {
+          yield { type: "text_delta", text: output, stream: "output" };
+        }
+      })(),
+      result: Promise.resolve({ status: "completed", stopReason: "end_turn" }),
+      cancel: async () => {},
     };
   }
 }
@@ -314,6 +343,150 @@ function createHarness(
   });
   return { facade, identity, runtime, store };
 }
+
+type StructuredAnswer = { answer: number };
+
+const STRUCTURED_ANSWER_SCHEMA = {
+  type: "object",
+  properties: { answer: { type: "number" } },
+  required: ["answer"],
+  additionalProperties: false,
+} as const;
+
+function validateStructuredAnswer(value: unknown): StructuredAnswer {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    typeof (value as { answer?: unknown }).answer !== "number"
+  ) {
+    throw new Error("answer must be a number");
+  }
+  return value as StructuredAnswer;
+}
+
+function structuredRunInput(idempotencyKey: string) {
+  return {
+    agent: "claude",
+    idempotencyKey,
+    content: "Compile the strategy packet.",
+    deadlineMs: 1_000,
+    outputSchema: STRUCTURED_ANSWER_SCHEMA,
+    validate: validateStructuredAnswer,
+  };
+}
+
+test("runStructured returns validated strict JSON and always destroys its oneshot Agent", async () => {
+  const runtime = new StructuredOutputAgentRuntime(['{"answer":42}']);
+  const { facade, store } = createHarness(runtime);
+  const root = await facade.bootstrapRoot({ agent: "codex", cwd: TEST_WORKSPACE });
+  const actor: FacadeActor = { rootExecutionId: root.rootExecutionId, agentId: root.agentId };
+  const isolation = {
+    inheritMcpServers: false,
+    inheritEnvironment: false,
+    permissionMode: "deny-all" as const,
+    nonInteractivePermissions: "fail" as const,
+  };
+
+  const result = await facade.runStructured(
+    { ...structuredRunInput("structured-success"), isolation },
+    actor,
+  );
+
+  assert.deepEqual(result.result, { answer: 42 });
+  assert.ok(result.operationId);
+  assert.equal(runtime.ensured.length, 1);
+  assert.equal(runtime.ensured[0]?.input.mode, "oneshot");
+  assert.deepEqual(runtime.ensured[0]?.input.runtimePolicy, isolation);
+  assert.match(runtime.started[0]?.text ?? "", /Return exactly one JSON value/);
+  assert.deepEqual(runtime.destroyed, [runtime.ensured[0]?.input.agentId]);
+  assert.deepEqual(
+    await store.read(
+      (snapshot) => snapshot.agents[runtime.ensured[0]?.input.agentId ?? ""]?.runtimePolicy,
+    ),
+    isolation,
+  );
+});
+
+test("runStructured destroys its Agent when strict JSON parsing fails", async () => {
+  const runtime = new StructuredOutputAgentRuntime(["not-json"]);
+  const { facade } = createHarness(runtime);
+  const root = await facade.bootstrapRoot({ agent: "codex", cwd: TEST_WORKSPACE });
+  const actor: FacadeActor = { rootExecutionId: root.rootExecutionId, agentId: root.agentId };
+
+  await assert.rejects(facade.runStructured(structuredRunInput("structured-parse"), actor), {
+    code: "STRUCTURED_OUTPUT_INVALID",
+  });
+  assert.equal(runtime.destroyed.length, 1);
+});
+
+test("runStructured destroys its Agent when schema validation fails", async () => {
+  const runtime = new StructuredOutputAgentRuntime(['{"answer":"wrong"}']);
+  const { facade } = createHarness(runtime);
+  const root = await facade.bootstrapRoot({ agent: "codex", cwd: TEST_WORKSPACE });
+  const actor: FacadeActor = { rootExecutionId: root.rootExecutionId, agentId: root.agentId };
+
+  await assert.rejects(facade.runStructured(structuredRunInput("structured-schema"), actor), {
+    code: "STRUCTURED_SCHEMA_INVALID",
+  });
+  assert.equal(runtime.destroyed.length, 1);
+});
+
+test("runStructured cancels the active Turn at deadline and then destroys its Agent", async () => {
+  const runtime = new ControlledAgentRuntime();
+  const { facade } = createHarness(runtime);
+  const root = await facade.bootstrapRoot({ agent: "codex", cwd: TEST_WORKSPACE });
+  const actor: FacadeActor = { rootExecutionId: root.rootExecutionId, agentId: root.agentId };
+
+  await assert.rejects(
+    facade.runStructured({ ...structuredRunInput("structured-deadline"), deadlineMs: 100 }, actor),
+    { code: "TIMEOUT", retryable: true },
+  );
+  assert.equal(runtime.cancellations.length, 1);
+  await waitForCondition(() => runtime.destroyed.length === 1);
+  assert.equal(runtime.destroyed.length, 1);
+});
+
+test("runStructured returns the persisted result for an idempotent retry", async () => {
+  const runtime = new StructuredOutputAgentRuntime(['{"answer":7}']);
+  const { facade } = createHarness(runtime);
+  const root = await facade.bootstrapRoot({ agent: "codex", cwd: TEST_WORKSPACE });
+  const actor: FacadeActor = { rootExecutionId: root.rootExecutionId, agentId: root.agentId };
+  const input = structuredRunInput("structured-retry");
+
+  const first = await facade.runStructured(input, actor);
+  const retry = await facade.runStructured(input, actor);
+
+  assert.deepEqual(retry, first);
+  assert.equal(runtime.ensured.length, 1);
+  assert.equal(runtime.started.length, 1);
+  assert.equal(runtime.destroyed.length, 1);
+});
+
+test("runStructured coalesces concurrent identical calls and rejects a conflicting key", async () => {
+  const runtime = new ControlledAgentRuntime("7");
+  const { facade } = createHarness(runtime);
+  const root = await facade.bootstrapRoot({ agent: "codex", cwd: TEST_WORKSPACE });
+  const actor: FacadeActor = { rootExecutionId: root.rootExecutionId, agentId: root.agentId };
+  const input = {
+    ...structuredRunInput("structured-concurrent"),
+    outputSchema: true,
+    validate: (value: unknown) => value,
+  };
+
+  const first = facade.runStructured(input, actor);
+  await waitForCondition(() => runtime.started.length === 1);
+  const second = facade.runStructured(input, actor);
+  await assert.rejects(facade.runStructured({ ...input, content: "different prompt" }, actor), {
+    code: "IDEMPOTENCY_CONFLICT",
+  });
+  runtime.completions[0]?.({ status: "completed", stopReason: "end_turn" });
+
+  const [firstResult, secondResult] = await Promise.all([first, second]);
+  assert.deepEqual(secondResult, firstResult);
+  assert.equal(runtime.ensured.length, 1);
+  assert.equal(runtime.destroyed.length, 1);
+});
 
 test("MultiAgentFacade closes its public gate and propagates runtime shutdown failures", async () => {
   const { facade } = createHarness(new FailingShutdownAgentRuntime());
@@ -1779,7 +1952,7 @@ test("MCP server exposes all facade tools and returns structured create results"
   });
   const structured = created.structuredContent as { agent?: { agent: string; state: string } };
 
-  assert.equal(tools.tools.length, 14);
+  assert.equal(tools.tools.length, 15);
   assert.match(instructions, /parallelizable/i);
   assert.match(instructions, /heterogeneous/i);
   assert.match(instructions, /do not delegate trivial or tightly coupled work/i);
@@ -1799,6 +1972,7 @@ test("MCP server exposes all facade tools and returns structured create results"
     tools.tools.map((tool) => tool.name),
     [
       "cs_agent_capabilities",
+      "cs_agent_run_structured",
       "cs_agent_create",
       "cs_agent_list",
       "cs_agent_status",
@@ -1817,6 +1991,7 @@ test("MCP server exposes all facade tools and returns structured create results"
   const toolsByName = new Map(tools.tools.map((tool) => [tool.name, tool]));
   const descriptionSignals: Record<string, RegExp> = {
     cs_agent_capabilities: /call first when considering delegation or heterogeneous execution/i,
+    cs_agent_run_structured: /strict JSON result.*creates, sends, waits.*destroys/i,
     cs_agent_create: /parallel work.*different agent runtime.*independent review/i,
     cs_agent_list: /before creating duplicates.*coordinating parallel work/i,
     cs_agent_status: /diagnose.*before deciding to wait.*cancel.*retry/i,
@@ -1835,6 +2010,7 @@ test("MCP server exposes all facade tools and returns structured create results"
     assert.match(toolsByName.get(toolName)?.description ?? "", signal, toolName);
   }
   assert.equal(toolsByName.get("cs_agent_send")?.annotations?.idempotentHint, true);
+  assert.equal(toolsByName.get("cs_agent_run_structured")?.annotations?.idempotentHint, true);
   assert.equal(toolsByName.get("cs_agent_send")?.annotations?.destructiveHint, true);
   assert.equal(toolsByName.get("cs_agent_send")?.annotations?.openWorldHint, true);
   assert.equal(toolsByName.get("cs_agent_respond_permission")?.annotations?.openWorldHint, true);
@@ -1926,6 +2102,30 @@ test("MCP tools preserve facade errors, correlations, bounded waits, cursors, an
     invalidContent[0]?.type === "text" ? (invalidContent[0].text ?? "") : "",
     /Invalid arguments/,
   );
+  const ensuredBeforeUnsupportedIsolation = runtime.ensured.length;
+  const unsupportedIsolation = await client.callTool({
+    name: "cs_agent_run_structured",
+    arguments: {
+      agent: "claude",
+      idempotencyKey: "unsupported-isolation",
+      content: "compile",
+      outputSchema: true,
+      deadlineMs: 1_000,
+      isolation: { filesystem: "read-only" },
+    },
+  });
+  assert.equal(unsupportedIsolation.isError, true);
+  const unsupportedIsolationContent = unsupportedIsolation.content as Array<{
+    type?: string;
+    text?: string;
+  }>;
+  assert.match(
+    unsupportedIsolationContent[0]?.type === "text"
+      ? (unsupportedIsolationContent[0].text ?? "")
+      : "",
+    /Invalid arguments/,
+  );
+  assert.equal(runtime.ensured.length, ensuredBeforeUnsupportedIsolation);
   const invalidWaitManyInputs = [
     { turnIds: [] },
     {

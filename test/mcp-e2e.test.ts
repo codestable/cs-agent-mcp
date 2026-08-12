@@ -27,6 +27,7 @@ const MOCK_AGENT_PATH = fileURLToPath(new URL("./mock-agent.js", import.meta.url
 
 const EXPECTED_TOOLS = [
   "cs_agent_capabilities",
+  "cs_agent_run_structured",
   "cs_agent_create",
   "cs_agent_list",
   "cs_agent_status",
@@ -231,7 +232,7 @@ async function waitForStartedTurn(client: Client, agentId: string): Promise<stri
   throw new Error(`Timed out waiting for a started turn on ${agentId}`);
 }
 
-test("all 14 cs_agent tools complete a lifecycle through the cs-agent-mcp stdio entrypoint", async (t) => {
+test("all 15 cs_agent tools complete a lifecycle through the cs-agent-mcp stdio entrypoint", async (t) => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "cs-agent-mcp-e2e-"));
   const workspace = path.join(home, "workspace");
   await fs.mkdir(path.join(home, ".cs-agent-mcp"), { recursive: true });
@@ -287,6 +288,57 @@ test("all 14 cs_agent tools complete a lifecycle through the cs-agent-mcp stdio 
   for (const agent of ["pi", "openclaw", "gemini"]) {
     assert.equal(advertisedAgents.has(agent), true, `${agent} must remain MCP-discoverable`);
   }
+
+  const structuredRun = await client.callTool({
+    name: "cs_agent_run_structured",
+    arguments: {
+      agent: "codex",
+      content: 'structured-json {"answer":42}',
+      idempotencyKey: "e2e-structured-run",
+      outputSchema: {
+        type: "object",
+        properties: { answer: { type: "number" } },
+        required: ["answer"],
+        additionalProperties: false,
+      },
+      isolation: {
+        inheritMcpServers: false,
+        inheritEnvironment: false,
+        permissionMode: "deny-all",
+        nonInteractivePermissions: "fail",
+      },
+      deadlineMs: 10_000,
+    },
+  });
+  assert.equal(structuredRun.isError, undefined, JSON.stringify(structuredRun.structuredContent));
+  const structuredRunContent = structuredRun.structuredContent as {
+    operationId?: string;
+    result?: { answer?: number };
+  };
+  assert.ok(structuredRunContent.operationId);
+  assert.equal(structuredRunContent.result?.answer, 42);
+  const structuredRetry = await client.callTool({
+    name: "cs_agent_run_structured",
+    arguments: {
+      agent: "codex",
+      content: 'structured-json {"answer":42}',
+      idempotencyKey: "e2e-structured-run",
+      outputSchema: {
+        type: "object",
+        properties: { answer: { type: "number" } },
+        required: ["answer"],
+        additionalProperties: false,
+      },
+      isolation: {
+        inheritMcpServers: false,
+        inheritEnvironment: false,
+        permissionMode: "deny-all",
+        nonInteractivePermissions: "fail",
+      },
+      deadlineMs: 10_000,
+    },
+  });
+  assert.deepEqual(structuredRetry.structuredContent, structuredRun.structuredContent);
 
   const created = await client.callTool({
     name: "cs_agent_create",

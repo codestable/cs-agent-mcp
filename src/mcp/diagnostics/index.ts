@@ -1078,6 +1078,9 @@ function parseDiagnosticSnapshot(value: unknown): FacadeSnapshot {
   const permissions = requireRecord(record.permissions, "snapshot.permissions");
   const events = requireArray(record.events, "snapshot.events");
   requireRecord(record.idempotency, "snapshot.idempotency");
+  if (record.structuredIdempotency !== undefined) {
+    requireRecord(record.structuredIdempotency, "snapshot.structuredIdempotency");
+  }
   requireRecord(record.identities, "snapshot.identities");
 
   for (const [agentId, agent] of Object.entries(agents)) {
@@ -1168,6 +1171,9 @@ function parseAgent(agentId: string, value: unknown): void {
   }
   if (record.lastError !== undefined) {
     parseError(record.lastError, `snapshot.agents.${agentId}.lastError`);
+  }
+  if (record.runtimePolicy !== undefined) {
+    requireRecord(record.runtimePolicy, `snapshot.agents.${agentId}.runtimePolicy`);
   }
 }
 

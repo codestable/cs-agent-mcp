@@ -54,6 +54,7 @@ import type {
   AcpRuntimeTurnAttachment,
   AcpRuntimeTurn,
   AcpRuntimeTurnResult,
+  AcpRuntimeSessionPolicy,
   AcpRuntimeUsageBreakdown,
 } from "../public/contract.js";
 import { AcpRuntimeError } from "../public/errors.js";
@@ -581,6 +582,7 @@ export class AcpRuntimeManager {
   private readonly activeControllers = new Map<string, ActiveSessionController>();
   private readonly pendingPersistentClients = new Map<string, AcpClient>();
   private readonly sessionMcpServers = new Map<string, McpServer[]>();
+  private readonly sessionPolicies = new Map<string, AcpRuntimeSessionPolicy>();
   private readonly closingActiveRecords = new Set<string>();
 
   constructor(
@@ -630,6 +632,11 @@ export class AcpRuntimeManager {
     return structuredClone(this.sessionMcpServers.get(recordId) ?? this.options.mcpServers ?? []);
   }
 
+  private policyFor(recordId: string): AcpRuntimeSessionPolicy | undefined {
+    const policy = this.sessionPolicies.get(recordId);
+    return policy ? structuredClone(policy) : undefined;
+  }
+
   private async refreshClosedState(record: SessionRecord): Promise<boolean> {
     if (!this.closingActiveRecords.has(record.acpxRecordId)) {
       return record.closed === true;
@@ -668,6 +675,7 @@ export class AcpRuntimeManager {
     return true;
   }
 
+  // oxlint-disable-next-line complexity -- preserves pending-client and reconnect cleanup branches
   private async withRuntimeControlSession<T>(
     record: SessionRecord,
     sessionMode: "persistent" | "oneshot",
@@ -695,8 +703,14 @@ export class AcpRuntimeManager {
       saveRecord: async (connectedRecord) => await this.options.sessionStore.save(connectedRecord),
       createClient: (options) => this.createClient(options),
       mcpServers: this.mcpServersFor(record.acpxRecordId),
-      permissionMode: this.options.permissionMode,
-      nonInteractivePermissions: this.options.nonInteractivePermissions,
+      permissionMode:
+        this.policyFor(record.acpxRecordId)?.permissionMode ?? this.options.permissionMode,
+      nonInteractivePermissions:
+        this.policyFor(record.acpxRecordId)?.nonInteractivePermissions ??
+        this.options.nonInteractivePermissions,
+      permissionPolicy:
+        this.policyFor(record.acpxRecordId)?.permissionPolicy ?? this.options.permissionPolicy,
+      inheritEnvironment: this.policyFor(record.acpxRecordId)?.inheritEnvironment !== false,
       authCredentials: this.options.authCredentials,
       authPolicy: this.options.authPolicy,
       isolateClaudeUserSettings: this.options.isolateClaudeUserSettings,
@@ -711,6 +725,7 @@ export class AcpRuntimeManager {
       record: result.record,
     };
   }
+  // oxlint-disable-next-line complexity -- one session-init transaction owns client, record, and close cleanup
   async ensureSession(input: {
     sessionKey: string;
     agent: string;
@@ -720,6 +735,7 @@ export class AcpRuntimeManager {
     requireExistingSession?: boolean;
     mcpServers?: McpServer[];
     sessionOptions?: SessionAgentOptions;
+    runtimePolicy?: AcpRuntimeSessionPolicy;
   }): Promise<SessionRecord> {
     const cwd = path.resolve(input.cwd?.trim() || this.options.cwd);
     const agentCommand = this.options.agentRegistry.resolve(input.agent);
@@ -730,12 +746,17 @@ export class AcpRuntimeManager {
     }
     assertFreshSessionAllowed(input.requireExistingSession, existing, input.sessionKey);
 
+    const runtimePolicy = input.runtimePolicy;
+    const mcpServers = input.mcpServers ?? this.options.mcpServers ?? [];
     const client = this.createClient({
       agentCommand,
       cwd,
-      mcpServers: structuredClone(input.mcpServers ?? this.options.mcpServers ?? []),
-      permissionMode: this.options.permissionMode,
-      nonInteractivePermissions: this.options.nonInteractivePermissions,
+      mcpServers: structuredClone(mcpServers),
+      permissionMode: runtimePolicy?.permissionMode ?? this.options.permissionMode,
+      nonInteractivePermissions:
+        runtimePolicy?.nonInteractivePermissions ?? this.options.nonInteractivePermissions,
+      permissionPolicy: runtimePolicy?.permissionPolicy ?? this.options.permissionPolicy,
+      inheritEnvironment: runtimePolicy?.inheritEnvironment !== false,
       authCredentials: this.options.authCredentials,
       authPolicy: this.options.authPolicy,
       isolateClaudeUserSettings: this.options.isolateClaudeUserSettings,
@@ -755,7 +776,10 @@ export class AcpRuntimeManager {
         cwd,
         session,
       });
-      this.rememberSessionMcpServers(record.acpxRecordId, input.mcpServers);
+      this.rememberSessionMcpServers(record.acpxRecordId, mcpServers);
+      if (runtimePolicy) {
+        this.sessionPolicies.set(record.acpxRecordId, structuredClone(runtimePolicy));
+      }
       keepClientOpen = await this.keepPersistentClient(input.mode, record.acpxRecordId, client);
       return record;
     } finally {
@@ -765,6 +789,7 @@ export class AcpRuntimeManager {
     }
   }
 
+  // oxlint-disable-next-line complexity -- validates persistent reuse and policy/MCP replacement atomically
   private async tryReuseEnsuredSession(
     input: {
       sessionKey: string;
@@ -774,6 +799,7 @@ export class AcpRuntimeManager {
       resumeSessionId?: string;
       mcpServers?: McpServer[];
       sessionOptions?: SessionAgentOptions;
+      runtimePolicy?: AcpRuntimeSessionPolicy;
     },
     existing: SessionRecord | undefined,
     cwd: string,
@@ -795,13 +821,22 @@ export class AcpRuntimeManager {
     existing.closedAt = undefined;
     this.closingActiveRecords.delete(existing.acpxRecordId);
     const previousMcpServers = this.sessionMcpServers.get(existing.acpxRecordId);
+    const previousPolicy = this.sessionPolicies.get(existing.acpxRecordId);
     if (
       input.mcpServers !== undefined &&
       !isDeepStrictEqual(previousMcpServers ?? this.options.mcpServers ?? [], input.mcpServers)
     ) {
       await this.closePendingPersistentClient(existing.acpxRecordId);
     }
+    if (!isDeepStrictEqual(previousPolicy ?? {}, input.runtimePolicy ?? {})) {
+      await this.closePendingPersistentClient(existing.acpxRecordId);
+    }
     this.rememberSessionMcpServers(existing.acpxRecordId, input.mcpServers);
+    if (input.runtimePolicy) {
+      this.sessionPolicies.set(existing.acpxRecordId, structuredClone(input.runtimePolicy));
+    } else {
+      this.sessionPolicies.delete(existing.acpxRecordId);
+    }
     await this.options.sessionStore.save(existing);
     return existing;
   }
@@ -1034,8 +1069,14 @@ export class AcpRuntimeManager {
       agentCommand: record.agentCommand,
       cwd: record.cwd,
       mcpServers: this.mcpServersFor(record.acpxRecordId),
-      permissionMode: this.options.permissionMode,
-      nonInteractivePermissions: this.options.nonInteractivePermissions,
+      permissionMode:
+        this.policyFor(record.acpxRecordId)?.permissionMode ?? this.options.permissionMode,
+      nonInteractivePermissions:
+        this.policyFor(record.acpxRecordId)?.nonInteractivePermissions ??
+        this.options.nonInteractivePermissions,
+      permissionPolicy:
+        this.policyFor(record.acpxRecordId)?.permissionPolicy ?? this.options.permissionPolicy,
+      inheritEnvironment: this.policyFor(record.acpxRecordId)?.inheritEnvironment !== false,
       authCredentials: this.options.authCredentials,
       authPolicy: this.options.authPolicy,
       isolateClaudeUserSettings: this.options.isolateClaudeUserSettings,
@@ -1464,8 +1505,10 @@ export class AcpRuntimeManager {
     record.closedAt = isoNow();
     await this.options.sessionStore.save(record);
     this.sessionMcpServers.delete(record.acpxRecordId);
+    this.sessionPolicies.delete(record.acpxRecordId);
   }
 
+  // oxlint-disable-next-line complexity -- policy-aware temporary client and ACP close fallbacks
   private async closeBackendSession(record: SessionRecord): Promise<void> {
     const pendingClient = await this.readPendingPersistentClient(record, { consume: true });
 
@@ -1475,8 +1518,14 @@ export class AcpRuntimeManager {
         agentCommand: record.agentCommand,
         cwd: record.cwd,
         mcpServers: this.mcpServersFor(record.acpxRecordId),
-        permissionMode: this.options.permissionMode,
-        nonInteractivePermissions: this.options.nonInteractivePermissions,
+        permissionMode:
+          this.policyFor(record.acpxRecordId)?.permissionMode ?? this.options.permissionMode,
+        nonInteractivePermissions:
+          this.policyFor(record.acpxRecordId)?.nonInteractivePermissions ??
+          this.options.nonInteractivePermissions,
+        permissionPolicy:
+          this.policyFor(record.acpxRecordId)?.permissionPolicy ?? this.options.permissionPolicy,
+        inheritEnvironment: this.policyFor(record.acpxRecordId)?.inheritEnvironment !== false,
         authCredentials: this.options.authCredentials,
         authPolicy: this.options.authPolicy,
         isolateClaudeUserSettings: this.options.isolateClaudeUserSettings,

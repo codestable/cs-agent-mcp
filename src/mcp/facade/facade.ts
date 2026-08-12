@@ -8,6 +8,7 @@ import type {
 } from "../../runtime.js";
 import { canonicalizeWorkspacePath } from "../workspace-path.js";
 import { FacadeError, normalizeFacadeError } from "./errors.js";
+import { runStructuredOnce, type StructuredOutputSchema } from "./structured-runner.js";
 import type {
   Agent,
   AgentRuntimeAdapter,
@@ -48,6 +49,11 @@ const DEFAULT_LIMITS: FacadeLimits = {
 };
 const TEXT_DELTA_BATCH_COUNT = 16;
 const TEXT_DELTA_BATCH_CHARACTERS = 4_096;
+
+type ActiveStructuredRun = {
+  fingerprint: string;
+  promise: Promise<{ operationId: string; result: unknown }>;
+};
 
 type RuntimeTextDelta = Extract<AcpRuntimeEvent, { type: "text_delta" }>;
 
@@ -127,7 +133,11 @@ type MultiAgentFacadeOptions = {
   runtime: AgentRuntimeAdapter;
   rootExecutionId: string;
   allowedCwdRoots: string[];
-  mcpServersForToken: (token: string, agent: string) => McpServer[];
+  mcpServersForToken: (
+    token: string,
+    agent: string,
+    policy?: CreateAgentInput["runtimePolicy"],
+  ) => McpServer[];
   limits?: Partial<FacadeLimits>;
   now?: () => number;
   createId?: () => string;
@@ -156,6 +166,14 @@ type PermissionWaiter = {
 
 function isTerminalTurn(turn: Turn): boolean {
   return turn.state === "completed" || turn.state === "failed" || turn.state === "cancelled";
+}
+
+function usesRuntimePermissionPolicy(policy: CreateAgentInput["runtimePolicy"]): boolean {
+  return (
+    policy?.permissionMode !== undefined ||
+    policy?.nonInteractivePermissions !== undefined ||
+    policy?.permissionPolicy !== undefined
+  );
 }
 
 function activeTurnCount(snapshot: FacadeSnapshot, rootExecutionId: string): number {
@@ -1065,6 +1083,7 @@ export class MultiAgentFacade {
   private readonly drainingAgents = new Set<string>();
   private readonly activatingAgents = new Map<string, Promise<void>>();
   private readonly permissionWaiters = new Map<string, PermissionWaiter>();
+  private readonly activeStructuredRuns = new Map<string, ActiveStructuredRun>();
   private readonly activeRuntimeTurns = new Map<
     string,
     ReturnType<AgentRuntimeAdapter["startTurn"]>
@@ -1275,6 +1294,7 @@ export class MultiAgentFacade {
     return {
       tools: [
         "cs_agent_capabilities",
+        "cs_agent_run_structured",
         "cs_agent_create",
         "cs_agent_list",
         "cs_agent_status",
@@ -1367,6 +1387,7 @@ export class MultiAgentFacade {
     return { ...snapshot, runtime };
   }
 
+  // oxlint-disable-next-line complexity -- one mutation owns identity, runtime, activation, and failure rollback
   async createAgent(
     input: CreateAgentInput,
     actor: FacadeActor,
@@ -1423,6 +1444,7 @@ export class MultiAgentFacade {
         createdAt: timestamp,
         updatedAt: timestamp,
         ...(input.sessionOptions ? { sessionOptions: input.sessionOptions } : {}),
+        ...(input.runtimePolicy ? { runtimePolicy: structuredClone(input.runtimePolicy) } : {}),
       };
       snapshot.agents[child.agentId] = child;
       appendEvent(
@@ -1458,12 +1480,15 @@ export class MultiAgentFacade {
           agent: agent.agent,
           cwd: runtimeCwd,
           mode: agent.mode,
-          mcpServers: this.options.mcpServersForToken(token, agent.agent),
+          mcpServers: this.options.mcpServersForToken(token, agent.agent, input.runtimePolicy),
+          ...(input.runtimePolicy ? { runtimePolicy: input.runtimePolicy } : {}),
           ...(agent.sessionOptions ? { sessionOptions: agent.sessionOptions } : {}),
         },
         {
-          onPermissionRequest: async (request, context) =>
-            await this.requestPermission(agent.agentId, request, context.signal),
+          onPermissionRequest: usesRuntimePermissionPolicy(input.runtimePolicy)
+            ? async () => undefined
+            : async (request, context) =>
+                await this.requestPermission(agent.agentId, request, context.signal),
         },
       );
     } catch (error) {
@@ -1547,6 +1572,141 @@ export class MultiAgentFacade {
 
     this.scheduleDrain(input.agentId);
     return receipt;
+  }
+
+  /**
+   * Run one disposable Agent turn and return a validated JSON value.
+   * The lifecycle is intentionally hidden behind this atomic seam.
+   */
+  // oxlint-disable-next-line complexity -- idempotency, execution, persistence, and cleanup are one atomic operation
+  async runStructured<T>(
+    input: {
+      agent: string;
+      cwd?: string;
+      idempotencyKey: string;
+      content: string;
+      deadlineMs: number;
+      outputSchema: StructuredOutputSchema;
+      isolation?: import("../../runtime.js").AcpRuntimeSessionPolicy;
+      validate: (value: unknown) => T;
+    },
+    actor: FacadeActor,
+    audit?: MutationAuditContext,
+  ): Promise<{ operationId: string; result: T }> {
+    this.assertOpen();
+    const key = `${actor.agentId}:${input.idempotencyKey}`;
+    let fingerprint: string;
+    try {
+      fingerprint = createHash("sha256")
+        .update(
+          JSON.stringify({
+            agent: input.agent,
+            cwd: input.cwd ?? "",
+            content: input.content,
+            outputSchema: input.outputSchema,
+            isolation: input.isolation ?? {},
+          }),
+        )
+        .digest("hex");
+    } catch (error) {
+      throw new FacadeError("INVALID_ARGUMENT", "Structured input must be JSON serializable", {
+        cause: error,
+      });
+    }
+
+    const cached = await this.options.store.read((snapshot) => {
+      const entry = snapshot.structuredIdempotency?.[key];
+      if (entry && entry.fingerprint !== fingerprint) {
+        throw new FacadeError(
+          "IDEMPOTENCY_CONFLICT",
+          "idempotencyKey was already used with different structured input",
+        );
+      }
+      return entry;
+    });
+    const validate = (value: unknown): T => {
+      try {
+        return input.validate(value);
+      } catch (error) {
+        throw new FacadeError(
+          "STRUCTURED_SCHEMA_INVALID",
+          "Stored structured result failed validation",
+          {
+            cause: error,
+          },
+        );
+      }
+    };
+    if (cached) {
+      return { operationId: cached.operationId, result: validate(cached.result) };
+    }
+
+    const existing = this.activeStructuredRuns.get(key);
+    if (existing) {
+      if (existing.fingerprint !== fingerprint) {
+        throw new FacadeError(
+          "IDEMPOTENCY_CONFLICT",
+          "idempotencyKey is already running with different structured input",
+        );
+      }
+      const result = await existing.promise;
+      if (result.operationId.length === 0) {
+        throw new FacadeError("RUNTIME_FAILURE", "Structured run returned an invalid operation id");
+      }
+      return { operationId: result.operationId, result: validate(result.result) };
+    }
+
+    const operationId = this.createId();
+    const run = runStructuredOnce(input, {
+      operationId,
+      actor,
+      operations: {
+        createAgent: async (createInput, runActor, runAudit) =>
+          await this.createAgent(createInput, runActor, runAudit),
+        send: async (sendInput, runActor, runAudit) =>
+          await this.send(sendInput, runActor, runAudit),
+        waitMessage: async (waitInput, runActor) => await this.waitMessage(waitInput, runActor),
+        cancel: async (cancelInput, runActor, runAudit) =>
+          await this.cancel(cancelInput, runActor, runAudit),
+        destroyAgent: async (destroyInput, runActor, runAudit) =>
+          await this.destroyAgent(destroyInput, runActor, runAudit),
+      },
+      audit,
+      now: this.now,
+      maxWaitMs: this.limits.maxWaitMs,
+    }).then(async (result) => {
+      return await this.options.store.update((snapshot): { operationId: string; result: T } => {
+        snapshot.structuredIdempotency ??= {};
+        const current = snapshot.structuredIdempotency[key];
+        if (current && current.fingerprint !== fingerprint) {
+          throw new FacadeError(
+            "IDEMPOTENCY_CONFLICT",
+            "idempotencyKey was already used with different structured input",
+          );
+        }
+        if (current) {
+          return {
+            operationId: current.operationId,
+            result: structuredClone(current.result) as T,
+          };
+        }
+        snapshot.structuredIdempotency[key] = {
+          fingerprint,
+          operationId,
+          result: structuredClone(result.result),
+        };
+        return { operationId, result: structuredClone(result.result) };
+      });
+    });
+    const active: ActiveStructuredRun = { fingerprint, promise: run };
+    this.activeStructuredRuns.set(key, active);
+    try {
+      return await run;
+    } finally {
+      if (this.activeStructuredRuns.get(key) === active) {
+        this.activeStructuredRuns.delete(key);
+      }
+    }
   }
 
   async getTurn(input: { turnId: string }, actor: FacadeActor): Promise<Turn> {
@@ -2110,6 +2270,7 @@ export class MultiAgentFacade {
     }
   }
 
+  // oxlint-disable-next-line complexity -- resume and rollback must remain one state transition
   private async resumeDormantAgent(agentId: string): Promise<void> {
     const agent = await this.options.store.read((snapshot) => snapshot.agents[agentId]);
     if (!agent || agent.state !== "dormant") {
@@ -2129,13 +2290,16 @@ export class MultiAgentFacade {
           agent: agent.agent,
           cwd: runtimeCwd,
           mode: agent.mode,
-          mcpServers: this.options.mcpServersForToken(token, agent.agent),
+          mcpServers: this.options.mcpServersForToken(token, agent.agent, agent.runtimePolicy),
           requireExistingSession: agent.mode === "persistent",
+          ...(agent.runtimePolicy ? { runtimePolicy: agent.runtimePolicy } : {}),
           ...(agent.sessionOptions ? { sessionOptions: agent.sessionOptions } : {}),
         },
         {
-          onPermissionRequest: async (request, context) =>
-            await this.requestPermission(agent.agentId, request, context.signal),
+          onPermissionRequest: usesRuntimePermissionPolicy(agent.runtimePolicy)
+            ? async () => undefined
+            : async (request, context) =>
+                await this.requestPermission(agent.agentId, request, context.signal),
         },
       );
       const activated = await this.options.store.update((snapshot) => {
@@ -2192,13 +2356,16 @@ export class MultiAgentFacade {
           agent: agent.agent,
           cwd: runtimeCwd,
           mode: agent.mode,
-          mcpServers: this.options.mcpServersForToken(token, agent.agent),
+          mcpServers: this.options.mcpServersForToken(token, agent.agent, agent.runtimePolicy),
           requireExistingSession: true,
+          ...(agent.runtimePolicy ? { runtimePolicy: agent.runtimePolicy } : {}),
           ...(agent.sessionOptions ? { sessionOptions: agent.sessionOptions } : {}),
         },
         {
-          onPermissionRequest: async (request, context) =>
-            await this.requestPermission(agent.agentId, request, context.signal),
+          onPermissionRequest: usesRuntimePermissionPolicy(agent.runtimePolicy)
+            ? async () => undefined
+            : async (request, context) =>
+                await this.requestPermission(agent.agentId, request, context.signal),
         },
       );
     } catch (error) {

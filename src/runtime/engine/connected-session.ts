@@ -10,6 +10,7 @@ import type {
   AuthPolicy,
   McpServer,
   NonInteractivePermissionPolicy,
+  PermissionPolicy,
   PermissionMode,
   SessionRecord,
   SessionResumePolicy,
@@ -43,6 +44,8 @@ export type WithConnectedSessionOptions<T> = {
   mcpServers?: McpServer[];
   permissionMode?: PermissionMode;
   nonInteractivePermissions?: NonInteractivePermissionPolicy;
+  permissionPolicy?: PermissionPolicy;
+  inheritEnvironment?: boolean;
   onPermissionRequest?: (
     req: AcpPermissionRequest,
     ctx: { signal: AbortSignal },
@@ -103,6 +106,8 @@ export async function withConnectedSession<T>(
       mcpServers: options.mcpServers,
       permissionMode: options.permissionMode ?? "approve-reads",
       nonInteractivePermissions: options.nonInteractivePermissions,
+      permissionPolicy: options.permissionPolicy,
+      inheritEnvironment: options.inheritEnvironment,
       onPermissionRequest: options.onPermissionRequest,
       authCredentials: options.authCredentials,
       authPolicy: options.authPolicy,
@@ -117,6 +122,8 @@ export async function withConnectedSession<T>(
       mcpServers: options.mcpServers,
       permissionMode: options.permissionMode ?? "approve-reads",
       nonInteractivePermissions: options.nonInteractivePermissions,
+      permissionPolicy: options.permissionPolicy,
+      inheritEnvironment: options.inheritEnvironment,
       onPermissionRequest: options.onPermissionRequest,
       authCredentials: options.authCredentials,
       authPolicy: options.authPolicy,

@@ -46,7 +46,7 @@ Workspace Facade ---- FileFacadeStore
 ### Transport
 
 根 MCP 客户端各自连接轻量 stdio 前端。前端发现或竞争启动机器级按需 Broker，再把 stdio 与
-Broker 的有状态 Streamable HTTP session 双向桥接；它不注册或复制 14 个工具。Broker 为每个根
+Broker 的有状态 Streamable HTTP session 双向桥接；它不注册或复制 15 个工具。Broker 为每个根
 session 创建真实 MCP server，并按规范化 roots 把连接路由到 Workspace Registry 中唯一的 Facade。
 
 根 session 使用仅存于私有 descriptor 的 Broker credential。initialize 后，前端建立带
@@ -93,6 +93,7 @@ CLI 命令不属于兼容契约；Agent 执行和编排统一由 MCP tools 驱�
 ## 工具分组
 
 - 能力与发现：`cs_agent_capabilities`
+- 原子结构化执行：`cs_agent_run_structured`
 - Agent 生命周期：`cs_agent_create`、`cs_agent_list`、`cs_agent_status`、
   `cs_agent_destroy`
 - 消息与 Turn：`cs_agent_send`、`cs_agent_get_message`、`cs_agent_wait_message`、
@@ -135,6 +136,25 @@ snapshot 中全部 ready 项；all 等待 pending 为空，但权限请求会提
 
 runtime 自身若命中 prompt timeout，会取消 active prompt 并把 Turn 标为 `failed/TIMEOUT`。取消前
 已到达的文本和工具事件仍保留在事件与会话诊断中，但不会生成最终 Message 或成功终态。
+
+### 原子结构化执行
+
+`cs_agent_run_structured` 是通用 Facade 原子接口，不承载上层 Strategy 业务逻辑。它创建一个
+`oneshot` Agent，发送附带严格 JSON 约束的 prompt，等待终态回复，并在返回前总是销毁 Agent；
+deadline 命中时先取消 active Turn。回复仅接受单个可由 `JSON.parse` 解析的 JSON 值，再由调用方
+提供的 JSON Schema 转为 validator 校验。解析失败、schema 失败、权限失败和 runtime 失败都走相同
+清理路径。
+
+`deadlineMs` 从原子调用开始计时，覆盖 create、send、wait 以及有界的 cancel/destroy 收尾；若底层收尾
+超过剩余预算，调用按 deadline 返回错误，同时继续观察迟到的清理结果，避免取消或销毁永久挂住 MCP
+请求。同一 actor 的 `idempotencyKey` 与 agent、cwd、prompt、schema、
+isolation 共同形成 fingerprint。成功结果与 `operationId` 持久化到 Facade snapshot；相同输入重试
+返回同一结果，不同输入复用 key 返回 `IDEMPOTENCY_CONFLICT`，失败不会写入成功缓存。
+
+每次执行可覆盖配置 MCP 继承、环境继承和 ACP permission policy。关闭 MCP 继承时只去掉用户和项目
+配置 MCP，受管 Agent 用于递归控制面的认证 loopback 仍保留。关闭环境继承时保留启动 ACP 命令所需
+的 `PATH` 与显式认证注入。filesystem/network 强隔离不属于当前能力，公开 strict schema 不接受这些
+字段，也不会把未支持的隔离请求降级为普通执行。
 
 ### 权限
 
@@ -221,7 +241,7 @@ generation 更替、实例停止或 Agent destroyed 前会按 cursor 做最终 d
 `:oneshot:` records 后按创建时间合并一次性任务会话，再投影 User、Agent、Thinking、ToolUse 和
 ToolResult。它只读取 runtime 已持久化的原生记录，不复制会话。renderer、状态机与 terminal
 adapter 分离，Facade 和 MCP transport 不反向依赖终端库。`terminal-kit` 只在 `top|ps` action 中
-动态加载，因此无参数 stdio、`list/status/attach` 和 14 个 MCP tools 不加载 TUI CJS 依赖。
+动态加载，因此无参数 stdio、`list/status/attach` 和 15 个 MCP tools 不加载 TUI CJS 依赖。
 
 列表读取以 epoch 串行合并，Attach generator 由 generation、AbortController 和唯一 pump 管理；
 会话快照按 epoch 防止旧读取覆盖新内容，默认每秒刷新。renderer 在测量和绘制前再次净化

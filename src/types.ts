@@ -60,6 +60,15 @@ export type PermissionPolicy = {
   defaultAction?: PermissionPolicyAction;
 };
 
+/** Per-session controls that can be overridden by an explicitly scoped run. */
+export type AcpRuntimeSessionPolicy = {
+  inheritMcpServers?: boolean;
+  inheritEnvironment?: boolean;
+  permissionMode?: PermissionMode;
+  nonInteractivePermissions?: NonInteractivePermissionPolicy;
+  permissionPolicy?: PermissionPolicy;
+};
+
 export type PermissionEscalationEvent = {
   type: "permission_escalation";
   sessionId: string;
@@ -207,6 +216,8 @@ export type AcpClientOptions = {
   permissionMode: PermissionMode;
   nonInteractivePermissions?: NonInteractivePermissionPolicy;
   permissionPolicy?: PermissionPolicy;
+  /** Whether the spawned ACP child inherits the parent process environment. */
+  inheritEnvironment?: boolean;
   authCredentials?: Record<string, string>;
   authPolicy?: AuthPolicy;
   terminal?: boolean;

@@ -51,6 +51,7 @@ export type {
   AcpRuntimeOptions,
   AcpRuntimePromptMode,
   AcpRuntimeSessionMode,
+  AcpRuntimeSessionPolicy,
   AcpRuntimeSessionModels,
   AcpRuntimeSessionUsage,
   AcpRuntimeStatus,
@@ -150,6 +151,7 @@ export class AcpxRuntime implements AcpxRuntimeLike {
       requireExistingSession: input.requireExistingSession,
       mcpServers: input.mcpServers,
       sessionOptions: input.sessionOptions,
+      runtimePolicy: input.runtimePolicy,
     });
 
     const handle: AcpRuntimeHandle = {

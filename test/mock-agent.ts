@@ -1322,6 +1322,11 @@ class MockAgent implements Agent {
     if (text === "echo") {
       return "";
     }
+    if (text.startsWith("structured-json ")) {
+      const value = text.slice("structured-json ".length).split("\n", 1)[0] ?? "";
+      JSON.parse(value);
+      return value;
+    }
     if (text === "retryable-error-once") {
       return "recovered after retry";
     }

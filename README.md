@@ -115,6 +115,8 @@ MCP 初始化信息和工具描述会主动提示调用 Agent 在以下场景考
 
 ```text
 cs_agent_capabilities
+  -> cs_agent_run_structured（单次严格 JSON 结果；原子创建、等待和销毁）
+或
   -> cs_agent_create（按独立角色创建一个或多个 Agent）
   -> cs_agent_send（先给每个 Agent 发送自包含任务）
   -> cs_agent_wait_many（多个 Turn 使用 any/all 汇总；单 Turn 使用 wait_message）
@@ -214,22 +216,37 @@ Broker 内唯一的 Facade/runtime owner。最后一个前端离开后，Broker 
 结果，最后按需取消 Turn 或销毁 Agent。MCP server instructions、工具 description 和输入 schema
 字段说明都携带这套决策与编排提示，即使宿主只展示 `tools/list` 也能看到关键使用条件。
 
-| 工具                          | 主要参数                                                             | 能力                                                              |
-| ----------------------------- | -------------------------------------------------------------------- | ----------------------------------------------------------------- |
-| `cs_agent_capabilities`       | `probeAgents?`                                                       | 列出工具、限制、内置 Agent，并可真实探测指定 Agent                |
-| `cs_agent_create`             | `agent`、`name?`、`cwd?`、`mode?`、`sessionOptions?`                 | 创建使用持久或一次性 ACP 会话模式的受管 Agent                     |
-| `cs_agent_list`               | `parentAgentId?`、`agent?`、`state?`、`cursor?`、`limit?`            | 分页列出当前调用者可见的委派子树                                  |
-| `cs_agent_status`             | `agentId`                                                            | 查询生命周期、队列、权限和底层运行时状态                          |
-| `cs_agent_events`             | `afterCursor?`、`agentId?`、`turnId?`、`limit?`、`waitMs?`           | 增量读取结构化事件，支持最长 30 秒等待                            |
-| `cs_agent_send`               | `agentId`、`content`、`idempotencyKey`、`attachments?`、`timeoutMs?` | 向子 Agent 的 FIFO 队列发送幂等任务，返回 `messageId` 和 `turnId` |
-| `cs_agent_get_message`        | `messageId`                                                          | 读取一条不可变输入或回复消息                                      |
-| `cs_agent_wait_message`       | `turnId` 或 `messageId`、`waitMs?`                                   | 等待回复、权限请求或无回复的终态                                  |
-| `cs_agent_wait_many`          | `turnIds`、`mode?`、`waitMs?`                                        | 等待任意或全部 Turn，返回 ready 与 pending 集合                   |
-| `cs_agent_get_turn`           | `turnId`                                                             | 读取 Turn 状态、修订号、错误和关联消息                            |
-| `cs_agent_wait_turn`          | `turnId`、`afterRevision?`、`waitMs?`                                | 等待 Turn 状态变化或权限请求                                      |
-| `cs_agent_respond_permission` | `permissionId`、`outcome`                                            | 允许、拒绝或取消待处理权限请求                                    |
-| `cs_agent_cancel`             | `turnId`、`reason?`                                                  | 取消排队中或运行中的 Turn，并取消其未完成后代 Turn                |
-| `cs_agent_destroy`            | `agentId`、`cascade?`、`discardSession?`                             | 销毁 Agent，可递归销毁后代并丢弃底层会话                          |
+| 工具                          | 主要参数                                                                         | 能力                                                              |
+| ----------------------------- | -------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| `cs_agent_capabilities`       | `probeAgents?`                                                                   | 列出工具、限制、内置 Agent，并可真实探测指定 Agent                |
+| `cs_agent_run_structured`     | `agent`、`content`、`idempotencyKey`、`outputSchema`、`deadlineMs`、`isolation?` | 原子运行一次性 Agent，返回经 JSON Schema 校验的严格 JSON          |
+| `cs_agent_create`             | `agent`、`name?`、`cwd?`、`mode?`、`sessionOptions?`                             | 创建使用持久或一次性 ACP 会话模式的受管 Agent                     |
+| `cs_agent_list`               | `parentAgentId?`、`agent?`、`state?`、`cursor?`、`limit?`                        | 分页列出当前调用者可见的委派子树                                  |
+| `cs_agent_status`             | `agentId`                                                                        | 查询生命周期、队列、权限和底层运行时状态                          |
+| `cs_agent_events`             | `afterCursor?`、`agentId?`、`turnId?`、`limit?`、`waitMs?`                       | 增量读取结构化事件，支持最长 30 秒等待                            |
+| `cs_agent_send`               | `agentId`、`content`、`idempotencyKey`、`attachments?`、`timeoutMs?`             | 向子 Agent 的 FIFO 队列发送幂等任务，返回 `messageId` 和 `turnId` |
+| `cs_agent_get_message`        | `messageId`                                                                      | 读取一条不可变输入或回复消息                                      |
+| `cs_agent_wait_message`       | `turnId` 或 `messageId`、`waitMs?`                                               | 等待回复、权限请求或无回复的终态                                  |
+| `cs_agent_wait_many`          | `turnIds`、`mode?`、`waitMs?`                                                    | 等待任意或全部 Turn，返回 ready 与 pending 集合                   |
+| `cs_agent_get_turn`           | `turnId`                                                                         | 读取 Turn 状态、修订号、错误和关联消息                            |
+| `cs_agent_wait_turn`          | `turnId`、`afterRevision?`、`waitMs?`                                            | 等待 Turn 状态变化或权限请求                                      |
+| `cs_agent_respond_permission` | `permissionId`、`outcome`                                                        | 允许、拒绝或取消待处理权限请求                                    |
+| `cs_agent_cancel`             | `turnId`、`reason?`                                                              | 取消排队中或运行中的 Turn，并取消其未完成后代 Turn                |
+| `cs_agent_destroy`            | `agentId`、`cascade?`、`discardSession?`                                         | 销毁 Agent，可递归销毁后代并丢弃底层会话                          |
+
+`cs_agent_run_structured` 内部完成 `create oneshot -> send -> wait -> cancel on deadline ->
+destroy`，再执行严格 `JSON.parse` 和 JSON Schema 校验。成功返回
+`{ "operationId": "...", "result": ... }`；同一调用者用同一个 `idempotencyKey` 重试相同输入时，
+返回同一个已持久化结果。相同键用于不同 prompt、schema 或 `isolation` 会返回
+`IDEMPOTENCY_CONFLICT`。`deadlineMs` 从原子调用开始计时，覆盖创建、发送、等待以及有界的取消/销毁
+收尾；命中 deadline 时会先取消 Turn，再销毁一次性 Agent。若底层收尾超过剩余预算，调用会按 deadline
+返回错误，同时继续观察迟到的清理结果。解析和 schema 失败也会销毁。
+
+`isolation` 只支持 `inheritMcpServers`、`inheritEnvironment`、`permissionMode`、
+`nonInteractivePermissions` 和 `permissionPolicy`。`inheritMcpServers: false` 去掉用户/项目配置的 MCP，
+但保留受管 Agent 返回控制面的认证 loopback MCP；`inheritEnvironment: false` 不继承环境变量，但保留
+启动 ACP 命令所需的 `PATH` 和显式认证注入。当前不提供 filesystem 或 network 强隔离，这些字段及
+其他未知隔离字段会在输入校验阶段拒绝，不会静默忽略。
 
 默认 `defaultPermissions` 是 `approve-reads`：读取类权限可以自动批准，写入等其他操作不会被静默
 批准。权限请求会通过等待工具返回给祖先调用者，由它调用 `cs_agent_respond_permission` 处理；没有

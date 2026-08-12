@@ -46,6 +46,7 @@ export type TerminalManagerOptions = {
   cwd: string;
   permissionMode: PermissionMode;
   nonInteractivePermissions?: NonInteractivePermissionPolicy;
+  inheritEnvironment?: boolean;
   onOperation?: (operation: ClientOperation) => void;
   confirmExecute?: (commandLine: string) => Promise<boolean>;
   killGraceMs?: number;
@@ -69,13 +70,19 @@ function toCommandLine(command: string, args: string[] | undefined): string {
   return renderedArgs.length > 0 ? `${command} ${renderedArgs}` : command;
 }
 
-function toEnvObject(env: CreateTerminalRequest["env"]): NodeJS.ProcessEnv | undefined {
-  if (!env || env.length === 0) {
+// oxlint-disable-next-line complexity -- merges explicit ACP values while honoring per-session inheritance
+function toEnvObject(
+  env: CreateTerminalRequest["env"],
+  inheritEnvironment = true,
+): NodeJS.ProcessEnv | undefined {
+  if ((!env || env.length === 0) && inheritEnvironment) {
     return undefined;
   }
 
-  const merged: NodeJS.ProcessEnv = { ...process.env };
-  for (const entry of env) {
+  const merged: NodeJS.ProcessEnv = inheritEnvironment
+    ? { ...process.env }
+    : { PATH: process.env.PATH ?? "" };
+  for (const entry of env ?? []) {
     merged[entry.name] = entry.value;
   }
   return merged;
@@ -86,8 +93,9 @@ export function buildTerminalSpawnOptions(
   cwd: string,
   env: CreateTerminalRequest["env"],
   platform: NodeJS.Platform = process.platform,
+  inheritEnvironment = true,
 ): TerminalSpawnOptions {
-  const resolvedEnv = toEnvObject(env);
+  const resolvedEnv = toEnvObject(env, inheritEnvironment);
   const options: TerminalSpawnOptions = {
     cwd,
     env: resolvedEnv,
@@ -155,6 +163,7 @@ function waitMs(ms: number): Promise<void> {
 
 export class TerminalManager {
   private readonly cwd: string;
+  private readonly inheritEnvironment: boolean;
   private permissionMode: PermissionMode;
   private nonInteractivePermissions: NonInteractivePermissionPolicy;
   private readonly onOperation?: (operation: ClientOperation) => void;
@@ -165,6 +174,7 @@ export class TerminalManager {
 
   constructor(options: TerminalManagerOptions) {
     this.cwd = options.cwd;
+    this.inheritEnvironment = options.inheritEnvironment !== false;
     this.permissionMode = options.permissionMode;
     this.nonInteractivePermissions = options.nonInteractivePermissions ?? "deny";
     this.onOperation = options.onOperation;
@@ -201,7 +211,11 @@ export class TerminalManager {
         0,
         Math.round(params.outputByteLimit ?? DEFAULT_TERMINAL_OUTPUT_LIMIT_BYTES),
       );
-      const { proc, spawnCommand } = await spawnTerminalProcess(params, this.cwd);
+      const { proc, spawnCommand } = await spawnTerminalProcess(
+        params,
+        this.cwd,
+        this.inheritEnvironment,
+      );
 
       let resolveExit: (response: WaitForTerminalExitResponse) => void = () => {};
       const exitPromise = new Promise<WaitForTerminalExitResponse>((resolve) => {
@@ -539,6 +553,7 @@ export class TerminalManager {
 async function spawnTerminalProcess(
   params: CreateTerminalRequest,
   defaultCwd: string,
+  inheritEnvironment = true,
 ): Promise<{
   proc: ChildProcessByStdio<null, Readable, Readable>;
   spawnCommand: TerminalSpawnCommand;
@@ -546,7 +561,7 @@ async function spawnTerminalProcess(
   const directCommand = buildTerminalSpawnCommand(params.command, params.args);
   try {
     return {
-      proc: await spawnAndWait(directCommand, params, defaultCwd),
+      proc: await spawnAndWait(directCommand, params, defaultCwd, inheritEnvironment),
       spawnCommand: directCommand,
     };
   } catch (error) {
@@ -558,7 +573,7 @@ async function spawnTerminalProcess(
       throw error;
     }
     return {
-      proc: await spawnAndWait(fallbackCommand, params, defaultCwd),
+      proc: await spawnAndWait(fallbackCommand, params, defaultCwd, inheritEnvironment),
       spawnCommand: fallbackCommand,
     };
   }
@@ -568,11 +583,14 @@ async function spawnAndWait(
   spawnCommand: TerminalSpawnCommand,
   params: CreateTerminalRequest,
   defaultCwd: string,
+  inheritEnvironment = true,
 ): Promise<ChildProcessByStdio<null, Readable, Readable>> {
   const spawnOptions = buildTerminalSpawnOptions(
     spawnCommand.command,
     params.cwd ?? defaultCwd,
     params.env,
+    process.platform,
+    inheritEnvironment,
   );
   if (spawnCommand.killProcessGroup) {
     spawnOptions.detached = true;

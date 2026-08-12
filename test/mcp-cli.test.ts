@@ -558,8 +558,9 @@ test("cs-agent-mcp serves the facade over stdio", async (t) => {
   await client.connect(transport);
   const tools = await client.listTools();
 
-  assert.equal(tools.tools.length, 14);
+  assert.equal(tools.tools.length, 15);
   assert.equal(tools.tools[0]?.name, "cs_agent_capabilities");
+  assert.equal(tools.tools[1]?.name, "cs_agent_run_structured");
   const createTool = tools.tools.find((tool) => tool.name === "cs_agent_create");
   const createSchema = createTool?.inputSchema as {
     properties?: {

@@ -82,26 +82,41 @@ function promotePrefixedAuthEnvironment(env: NodeJS.ProcessEnv): Set<string> {
 function buildAgentEnvironment(
   authCredentials: Record<string, string> | undefined,
   sessionEnv: Record<string, string> | undefined,
+  inheritEnvironment = true,
 ): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env };
-  const protectedAuthEnvKeys = promotePrefixedAuthEnvironment(env);
-  if (authCredentials) {
-    for (const [methodId, credential] of Object.entries(authCredentials)) {
-      addAuthCredentialEnvKeys(protectedAuthEnvKeys, methodId, credential);
-      assignAuthCredentialEnv(env, methodId, credential);
-    }
-  }
+  // A non-inheriting session still receives PATH so the configured ACP command
+  // can be resolved; auth credentials are injected independently below.
+  const env: NodeJS.ProcessEnv = inheritEnvironment
+    ? { ...process.env }
+    : { PATH: process.env.PATH ?? "" };
+  const protectedAuthEnvKeys = addAuthEnvironment(env, authCredentials);
+  addSessionEnvironment(env, sessionEnv, protectedAuthEnvKeys);
 
-  if (sessionEnv) {
-    for (const [key, value] of Object.entries(sessionEnv)) {
-      if (typeof value !== "string" || protectedAuthEnvKeys.has(protectedEnvKey(key))) {
-        continue;
-      }
+  return env;
+}
+
+function addAuthEnvironment(
+  env: NodeJS.ProcessEnv,
+  authCredentials: Record<string, string> | undefined,
+): Set<string> {
+  const protectedKeys = promotePrefixedAuthEnvironment(env);
+  for (const [methodId, credential] of Object.entries(authCredentials ?? {})) {
+    addAuthCredentialEnvKeys(protectedKeys, methodId, credential);
+    assignAuthCredentialEnv(env, methodId, credential);
+  }
+  return protectedKeys;
+}
+
+function addSessionEnvironment(
+  env: NodeJS.ProcessEnv,
+  sessionEnv: Record<string, string> | undefined,
+  protectedKeys: Set<string>,
+): void {
+  for (const [key, value] of Object.entries(sessionEnv ?? {})) {
+    if (typeof value === "string" && !protectedKeys.has(protectedEnvKey(key))) {
       assignSessionEnv(env, key, value);
     }
   }
-
-  return env;
 }
 
 function assignSessionEnv(env: NodeJS.ProcessEnv, key: string, value: string): void {
@@ -172,6 +187,7 @@ export function buildAgentSpawnOptions(
   cwd: string,
   authCredentials: Record<string, string> | undefined,
   sessionEnv?: Record<string, string>,
+  inheritEnvironment = true,
 ): {
   cwd: string;
   env: NodeJS.ProcessEnv;
@@ -180,7 +196,7 @@ export function buildAgentSpawnOptions(
 } {
   return {
     cwd,
-    env: buildAgentEnvironment(authCredentials, sessionEnv),
+    env: buildAgentEnvironment(authCredentials, sessionEnv, inheritEnvironment),
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
   };

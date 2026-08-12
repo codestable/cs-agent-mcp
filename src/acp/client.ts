@@ -476,6 +476,7 @@ export class AcpClient {
       cwd: this.options.cwd,
       permissionMode: this.options.permissionMode,
       nonInteractivePermissions: this.options.nonInteractivePermissions,
+      inheritEnvironment: this.options.inheritEnvironment !== false,
       onOperation: (operation) => {
         this.eventHandlers.onClientOperation?.(operation);
       },
@@ -676,6 +677,7 @@ export class AcpClient {
         this.options.cwd,
         this.options.authCredentials,
         this.options.sessionOptions?.env,
+        this.options.inheritEnvironment !== false,
       ),
     };
   }

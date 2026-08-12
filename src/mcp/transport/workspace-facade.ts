@@ -128,9 +128,10 @@ export async function startWorkspaceFacade(
       runtime,
       rootExecutionId,
       allowedCwdRoots: workspace.allowedCwdRoots,
-      mcpServersForToken: (token, agent) =>
+      mcpServersForToken: (token, agent, policy) =>
         buildManagedIdentityMcpServers({
           configuredServers: options.config.mcpServers,
+          inheritConfiguredServers: policy?.inheritMcpServers !== false,
           aliases: claudeControlPlaneAliases,
           includeClaudeAliases: isClaudeManagedAgent(agent),
           url: httpUrl,

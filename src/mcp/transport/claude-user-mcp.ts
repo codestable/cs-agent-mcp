@@ -225,6 +225,7 @@ export async function readClaudeControlPlaneMcpAliases(
 
 export function buildManagedIdentityMcpServers(input: {
   configuredServers: McpServer[];
+  inheritConfiguredServers?: boolean;
   aliases: string[];
   includeClaudeAliases: boolean;
   url: string;
@@ -234,7 +235,7 @@ export function buildManagedIdentityMcpServers(input: {
     (name, index, all) => all.indexOf(name) === index,
   );
   return [
-    ...input.configuredServers,
+    ...(input.inheritConfiguredServers === false ? [] : input.configuredServers),
     ...names.map(
       (name): McpServer => ({
         type: "http",

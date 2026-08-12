@@ -70,7 +70,11 @@ export function createAcpxRuntimeAdapter(options: AcpxRuntimeAdapterOptions): Ag
     current: EnsureRuntimeAgentInput,
     requested: EnsureRuntimeAgentInput,
   ): void => {
-    if (current.agent !== requested.agent || current.cwd !== requested.cwd) {
+    if (
+      current.agent !== requested.agent ||
+      current.cwd !== requested.cwd ||
+      JSON.stringify(current.runtimePolicy ?? {}) !== JSON.stringify(requested.runtimePolicy ?? {})
+    ) {
       throw new FacadeError(
         "SESSION_RESUME_REQUIRED",
         "A managed agent cannot change its backend or working directory during resume",
@@ -132,6 +136,7 @@ export function createAcpxRuntimeAdapter(options: AcpxRuntimeAdapterOptions): Ag
             requireExistingSession: input.requireExistingSession,
             mcpServers: input.mcpServers,
             sessionOptions: input.sessionOptions,
+            runtimePolicy: input.runtimePolicy,
           });
           const initialized = { runtime, handle, input, hooksRef };
           entries.set(input.agentId, initialized);
@@ -160,6 +165,7 @@ export function createAcpxRuntimeAdapter(options: AcpxRuntimeAdapterOptions): Ag
         requireExistingSession: input.requireExistingSession,
         mcpServers: input.mcpServers,
         sessionOptions: input.sessionOptions,
+        runtimePolicy: input.runtimePolicy,
       });
       entry.input = input;
     },

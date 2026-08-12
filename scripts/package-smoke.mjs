@@ -12,6 +12,7 @@ import { packageCommandSpawnOptions } from "./package-command-spawn.mjs";
 
 const EXPECTED_TOOLS = [
   "cs_agent_capabilities",
+  "cs_agent_run_structured",
   "cs_agent_create",
   "cs_agent_list",
   "cs_agent_status",
@@ -102,6 +103,24 @@ try {
     EXPECTED_TOOLS,
   );
 
+  const structured = await client.callTool({
+    name: "cs_agent_run_structured",
+    arguments: {
+      agent: "claude",
+      content: 'structured-json {"ok":true}',
+      idempotencyKey: "package-smoke-structured",
+      outputSchema: {
+        type: "object",
+        properties: { ok: { type: "boolean" } },
+        required: ["ok"],
+        additionalProperties: false,
+      },
+      deadlineMs: 30_000,
+    },
+  });
+  assert.equal(structured.isError, undefined, JSON.stringify(structured.structuredContent));
+  assert.deepEqual(structured.structuredContent?.result, { ok: true });
+
   const created = await client.callTool({
     name: "cs_agent_create",
     arguments: { agent: "claude", name: "package-smoke" },
@@ -174,7 +193,7 @@ try {
   assert.match(agentsAttach.stdout, /"reason":"agent_destroyed"/);
 
   process.stdout.write(
-    `${JSON.stringify({ toolCount: tools.tools.length, waitMany: "ok", lifecycle: "ok", diagnostics: "ok" })}\n`,
+    `${JSON.stringify({ toolCount: tools.tools.length, structured: "ok", waitMany: "ok", lifecycle: "ok", diagnostics: "ok" })}\n`,
   );
 } finally {
   await client.close().catch(() => {});

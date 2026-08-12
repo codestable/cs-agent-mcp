@@ -4,6 +4,17 @@
 
 ## 未发布
 
+### 原子结构化 Agent 执行
+
+- 新增第 15 个 MCP 工具 `cs_agent_run_structured`：原子完成 oneshot Agent 的创建、发送、等待、
+  deadline 取消和最终销毁，并以严格 JSON parse 与 JSON Schema 校验返回 typed result。
+- 同一 actor 的幂等 key 会持久化成功的 `operationId` 和结构化结果；相同输入重试返回同一结果，
+  不同输入复用 key 明确失败。解析失败、schema 失败和 deadline 均保证进入取消/销毁路径。
+- 支持 per-run MCP、环境和权限策略；关闭 MCP 继承仍保留认证 loopback 控制面。filesystem/network
+  强隔离不在当前能力内，相关或其他未知 `isolation` 字段会 fail closed，不会静默忽略。
+- capabilities、README、架构文档、tarball smoke 和 stdio E2E 均更新为 15 tools；Facade snapshot v1
+  以可选 `structuredIdempotency` 扩展保持旧 snapshot 可读。
+
 ## 0.3.1 - 2026-08-01
 
 ### maxTurns 委派引导
@@ -23,7 +34,7 @@
 - ACP SDK 升级到 `1.3.0`，MCP SDK 升级到 `1.30.0`；生产依赖固定使用已修复的
   `fast-uri 3.1.4` 与 `@hono/node-server 2.0.12`，消除已知 high/moderate 审计告警。
 - 本次不引入上游 Windows structured argv、filesystem capability opt-out、CLI queue/flow/timer
-  行为，保持 14 tools、Facade snapshot v1、Workspace owner 和受管 Agent 权限边界不变。
+  行为；Facade snapshot v1、Workspace owner 和受管 Agent 权限边界保持兼容。
 
 ### 受管 Claude 递归身份修复
 
@@ -39,7 +50,7 @@
   `any` 返回当前全部 ready 项，`all` 支持权限/timeout 中断后通过 `pendingTurnIds` 续等并跨轮累计。
 - Facade 提供 `waitMany`、`waitAny`、`waitAll`，批量等待使用单 snapshot 原子鉴权和单个 revision
   waiter，不修改 Facade snapshot v1 或既有 13 个工具的行为。
-- tarball smoke 现在通过实际临时安装验证 14 tools，并调用 wait-many 完成 Agent 生命周期。
+- tarball smoke 现在通过实际临时安装验证 15 tools，并调用 wait-many 完成 Agent 生命周期。
 
 ### Prompt 超时完整性修复
 

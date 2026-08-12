@@ -2,17 +2,23 @@ import type { ToolCallContent, ToolCallLocation, ToolKind } from "@agentclientpr
 import type {
   AcpPermissionDecision,
   AcpPermissionRequest,
+  AcpRuntimeSessionPolicy,
   AuthPolicy,
   McpServer,
   NonInteractivePermissionPolicy,
   PermissionMode,
+  PermissionPolicy,
   SessionRecord,
 } from "../../types.js";
 import type { SessionAgentOptions } from "../engine/session-options.js";
 
 export type { SessionAgentOptions, SystemPromptOption } from "../engine/session-options.js";
 
-export type { AcpPermissionDecision, AcpPermissionRequest } from "../../types.js";
+export type {
+  AcpPermissionDecision,
+  AcpPermissionRequest,
+  AcpRuntimeSessionPolicy,
+} from "../../types.js";
 
 export type AcpRuntimePromptMode = "prompt" | "steer";
 
@@ -65,6 +71,8 @@ export type AcpRuntimeEnsureInput = {
    * different sessionKey or closing the prior record first.
    */
   sessionOptions?: SessionAgentOptions;
+  /** Optional MCP, environment, and permission policy for this session. */
+  runtimePolicy?: AcpRuntimeSessionPolicy;
 };
 
 export type AcpRuntimeTurnAttachment = {
@@ -306,6 +314,7 @@ export type AcpRuntimeOptions = {
   mcpServers?: McpServer[];
   permissionMode: PermissionMode;
   nonInteractivePermissions?: NonInteractivePermissionPolicy;
+  permissionPolicy?: PermissionPolicy;
   authCredentials?: Record<string, string>;
   authPolicy?: AuthPolicy;
   timeoutMs?: number;

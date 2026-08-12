@@ -93,13 +93,46 @@ const sessionOptionsSchema = z.object({
     .optional(),
 });
 
+const permissionPolicySchema = z
+  .object({
+    autoApprove: z.array(z.string().min(1).max(256)).max(256).optional(),
+    autoDeny: z.array(z.string().min(1).max(256)).max(256).optional(),
+    escalate: z.array(z.string().min(1).max(256)).max(256).optional(),
+    defaultAction: z.enum(["approve", "deny", "escalate"]).optional(),
+  })
+  .strict();
+
+const structuredIsolationSchema = z
+  .object({
+    inheritMcpServers: z
+      .boolean()
+      .describe("Whether configured project/user MCP servers are exposed to this run.")
+      .optional(),
+    inheritEnvironment: z
+      .boolean()
+      .describe("Whether the ACP child inherits ambient process environment variables.")
+      .optional(),
+    permissionMode: z
+      .enum(["approve-all", "approve-reads", "deny-all"])
+      .describe("Permission mode used only for this run.")
+      .optional(),
+    nonInteractivePermissions: z
+      .enum(["deny", "fail"])
+      .describe("How this run handles a permission that cannot be prompted interactively.")
+      .optional(),
+    permissionPolicy: permissionPolicySchema
+      .describe("Optional per-run permission matching policy.")
+      .optional(),
+  })
+  .strict();
+
 const SERVER_INSTRUCTIONS = `Use cs-agent-mcp when a task benefits from managed delegation: independent parallelizable subtasks, heterogeneous agent runtimes, specialized roles, independent implementation and review, or long-running work that the caller should coordinate. Do not delegate trivial or tightly coupled work that the caller can complete directly.
 
 For heterogeneous work, choose different configured agent names for complementary roles rather than assuming one runtime is universally best. Give each child a self-contained objective, scope, constraints, expected deliverable, and verification criteria. Agents can recursively delegate, but each caller can only see and control its own delegation subtree.
 
 By default, omit sessionOptions.maxTurns for normal coding, review, debugging, and tool-heavy work. Set it only when a strict budget is required and failure at the limit is acceptable; never infer a small value from expected task duration.
 
-Recommended workflow: cs_agent_capabilities -> cs_agent_create -> send all independent turns -> cs_agent_wait_many for multi-turn fan-in -> cs_agent_destroy. Use cs_agent_wait_message for one turn. When wait-many returns because of permission or timeout, accumulate ready items by turnId and continue with pendingTurnIds. Use cs_agent_status, cs_agent_wait_turn, or cs_agent_events for progress and permission handling. Use cs_agent_cancel when work is obsolete, and cs_agent_destroy when the managed agent is no longer needed.`;
+Recommended workflow: cs_agent_capabilities -> cs_agent_create -> send all independent turns -> cs_agent_wait_many for multi-turn fan-in -> cs_agent_destroy. Use cs_agent_wait_message for one turn. For one strict JSON result, use cs_agent_run_structured. When wait-many returns because of permission or timeout, accumulate ready items by turnId and continue with pendingTurnIds. Use cs_agent_status, cs_agent_wait_turn, or cs_agent_events for progress and permission handling. Use cs_agent_cancel when work is obsolete, and cs_agent_destroy when the managed agent is no longer needed.`;
 
 const READ_ONLY_ANNOTATIONS = {
   readOnlyHint: true,
@@ -141,6 +174,82 @@ export function createFacadeMcpServer(options: FacadeMcpServerOptions): McpServe
       await runTool(options, async ({ facade, actor }) => ({
         capabilities: await facade.capabilities(input, actor),
       })),
+  );
+
+  server.registerTool(
+    "cs_agent_run_structured",
+    {
+      description:
+        "Run one disposable oneshot Agent task atomically and return a strict JSON result validated against outputSchema. The operation creates, sends, waits, cancels on deadline, and destroys the managed Agent before returning. Permission requests cannot be answered through this atomic tool.",
+      inputSchema: z.object({
+        agent: z
+          .string()
+          .min(1)
+          .max(128)
+          .describe("Configured local agent name returned by cs_agent_capabilities."),
+        cwd: z
+          .string()
+          .min(1)
+          .max(4_096)
+          .describe("Absolute workspace directory for the disposable Agent.")
+          .optional(),
+        idempotencyKey: z
+          .string()
+          .min(1)
+          .max(256)
+          .describe("Stable key for retrying the same structured operation."),
+        content: z
+          .string()
+          .min(1)
+          .max(1_000_000)
+          .describe("Task prompt; the runner appends the strict JSON output contract."),
+        outputSchema: z
+          .union([z.boolean(), z.record(z.string(), z.unknown())])
+          .describe("JSON Schema for the returned value; no executable validator is accepted."),
+        isolation: structuredIsolationSchema
+          .describe(
+            "Supported per-run MCP, environment, and permission controls. Filesystem and network isolation are not supported; unknown fields are rejected.",
+          )
+          .optional(),
+        deadlineMs: z
+          .number()
+          .int()
+          .positive()
+          .max(86_400_000)
+          .describe(
+            "Absolute operation budget in milliseconds; expiration triggers cancel and bounded cleanup.",
+          ),
+      }),
+      annotations: {
+        ...LOCAL_MUTATION_ANNOTATIONS,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
+    },
+    async (input, extra) =>
+      await runTool(options, async (context) => {
+        let schema: ReturnType<typeof z.fromJSONSchema>;
+        try {
+          schema = z.fromJSONSchema(input.outputSchema);
+        } catch (error) {
+          throw new FacadeError("INVALID_ARGUMENT", "outputSchema is not a supported JSON Schema", {
+            cause: error,
+          });
+        }
+        return await context.facade.runStructured(
+          {
+            ...input,
+            outputSchema: input.outputSchema,
+            validate: (value) => schema.parse(value),
+          },
+          context.actor,
+          {
+            toolName: "cs_agent_run_structured",
+            requestId: String(extra.requestId),
+          },
+        );
+      }),
   );
 
   server.registerTool(
