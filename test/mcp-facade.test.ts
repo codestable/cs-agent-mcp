@@ -159,15 +159,22 @@ class ControlledAgentRuntime extends FakeAgentRuntime {
 }
 
 class StructuredOutputAgentRuntime extends FakeAgentRuntime {
-  constructor(private readonly outputs: string[]) {
+  constructor(
+    private readonly outputs: string[],
+    private readonly diagnostics: string[] = [],
+  ) {
     super();
   }
 
   override startTurn(input: StartRuntimeTurnInput): RuntimeTurn {
     this.started.push(input);
     const output = this.outputs.shift() ?? "";
+    const diagnostic = this.diagnostics.shift();
     return {
       events: (async function* (): AsyncIterable<AcpRuntimeEvent> {
+        if (diagnostic) {
+          yield { type: "status", text: diagnostic, tag: "session_info_update" };
+        }
         if (output) {
           yield { type: "text_delta", text: output, stream: "output" };
         }
@@ -406,6 +413,19 @@ test("runStructured returns validated strict JSON and always destroys its onesho
     ),
     isolation,
   );
+});
+
+test("runStructured keeps Codex diagnostics out of strict JSON reply content", async () => {
+  const warning = "Warning: Skill descriptions were shortened to fit the skills context budget.";
+  const runtime = new StructuredOutputAgentRuntime(['{"answer":42}'], [warning]);
+  const { facade } = createHarness(runtime);
+  const root = await facade.bootstrapRoot({ agent: "codex", cwd: TEST_WORKSPACE });
+  const actor: FacadeActor = { rootExecutionId: root.rootExecutionId, agentId: root.agentId };
+
+  const result = await facade.runStructured(structuredRunInput("structured-codex-warning"), actor);
+
+  assert.deepEqual(result.result, { answer: 42 });
+  assert.deepEqual(runtime.destroyed, [runtime.ensured[0]?.input.agentId]);
 });
 
 test("runStructured destroys its Agent when strict JSON parsing fails", async () => {

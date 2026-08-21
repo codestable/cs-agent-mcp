@@ -49,12 +49,12 @@ test("built-in registry preserves the generic ACP runtime surface", () => {
 
 test("built-in registry tracks the acpx v0.13.0 adapter and native ACP commands", () => {
   assert.equal(AGENT_REGISTRY.pi, "npx pi-acp@^0.0.31");
-  assert.equal(AGENT_REGISTRY.codex, "npx -y @agentclientprotocol/codex-acp@^1.1.5");
+  assert.equal(AGENT_REGISTRY.codex, "npx -y @agentclientprotocol/codex-acp@^1.6.2");
   assert.equal(AGENT_REGISTRY.claude, "npx -y @agentclientprotocol/claude-agent-acp@^0.60.0");
   assert.equal(AGENT_REGISTRY.mux, "npx -y mux@^0.28.0 acp");
   assert.equal(AGENT_REGISTRY.pool, "pool acp");
   assert.equal(AGENT_REGISTRY.zeroclaw, "zeroclaw acp");
-  assert.equal(BUILT_IN_AGENT_PACKAGES.codex.packageRange, "^1.1.5");
+  assert.equal(BUILT_IN_AGENT_PACKAGES.codex.packageRange, "^1.6.2");
   assert.equal(BUILT_IN_AGENT_PACKAGES.claude.packageRange, "^0.60.0");
 });
 
@@ -63,6 +63,13 @@ test("known legacy adapter commands migrate only within the same built-in agent"
   assert.equal(
     areCompatibleBuiltInAgentCommands(
       "npx -y @agentclientprotocol/codex-acp@^0.0.44",
+      AGENT_REGISTRY.codex,
+    ),
+    true,
+  );
+  assert.equal(
+    areCompatibleBuiltInAgentCommands(
+      "npx -y @agentclientprotocol/codex-acp@^1.1.5",
       AGENT_REGISTRY.codex,
     ),
     true,

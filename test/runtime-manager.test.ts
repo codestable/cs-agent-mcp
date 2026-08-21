@@ -16,6 +16,7 @@ import type {
   AcpRuntimeTurn,
   AcpRuntimeTurnResult,
 } from "../src/runtime/public/contract.js";
+import { parsePromptEventLine } from "../src/runtime/public/events.js";
 import {
   createRuntimeOptions,
   InMemorySessionStore,
@@ -26,6 +27,43 @@ type FakeClientHandlers = {
   onSessionUpdate?: (notification: Record<string, unknown>) => void;
   onClientOperation?: (operation: Record<string, unknown>) => void;
 };
+
+test("typed Codex warnings stay diagnostic instead of becoming reply text", () => {
+  const warning = "Skill descriptions were shortened to fit the 2% skills context budget.";
+  const event = parsePromptEventLine(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: {
+        sessionId: "codex-session",
+        update: {
+          sessionUpdate: "session_info_update",
+          _meta: {
+            jetbrains: {
+              air: {
+                version: 1,
+                sessionFailure: {
+                  id: "notice-1",
+                  revision: 1,
+                  category: "unknown",
+                  severity: "warning",
+                  title: warning,
+                  actions: [],
+                },
+              },
+            },
+          },
+        },
+      },
+    }),
+  );
+
+  assert.deepEqual(event, {
+    type: "status",
+    text: `Warning: ${warning}`,
+    tag: "session_info_update",
+  });
+});
 
 type FakeClient = {
   initializeResult?: {

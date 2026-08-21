@@ -2,6 +2,15 @@
 
 本文件记录 `cs-agent-mcp` 的用户可见变更。
 
+## 0.3.3 - 2026-08-21
+
+### Codex warning 与回复内容隔离
+
+- Codex ACP 初始化现在协商 typed session failure 能力，运行时 warning 作为 `turn.status` 诊断事件
+  保留，不再降级为 `agent_message_chunk` 并污染 Agent reply content 或严格 JSON 输出。
+- 内置 Codex adapter 最低范围升级到 `^1.6.2`；`^1.1.5` 创建的持久会话仍按同一内置 Agent
+  兼容迁移。
+
 ## 0.3.2 - 2026-08-17
 
 ### 原子结构化 Agent 执行

@@ -8,6 +8,7 @@ import {
   buildAgentSpawnOptions,
   buildQoderAcpCommandArgs,
   parseAcpJsonMessageLine,
+  resolveClientCapabilities,
   resolveClaudeCodeSettingSources,
   resolveAgentCloseAfterStdinEndMs,
   shouldIgnoreNonJsonAgentOutputLine,
@@ -33,6 +34,28 @@ test("parseAcpJsonMessageLine preserves object-shaped protocol values", () => {
     jsonrpc: "2.0",
     method: "session/update",
   });
+});
+
+test("Codex initialization negotiates typed session failures", () => {
+  assert.deepEqual(
+    resolveClientCapabilities({ devinAcp: false, codexAcp: true, terminal: false }),
+    {
+      fs: { readTextFile: true, writeTextFile: true },
+      terminal: false,
+      _meta: {
+        jetbrains: {
+          air: {
+            version: 1,
+            capabilities: ["sessionFailure"],
+          },
+        },
+      },
+    },
+  );
+  assert.equal(
+    resolveClientCapabilities({ devinAcp: false, codexAcp: false, terminal: false })._meta,
+    undefined,
+  );
 });
 
 test("normalizeOutputError classifies Claude max-turn exhaustion with remediation", () => {

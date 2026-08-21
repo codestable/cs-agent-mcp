@@ -106,7 +106,47 @@ function configOptionStatusText(payload: Record<string, unknown>): string {
 }
 
 function sessionInfoStatusText(payload: Record<string, unknown>): string {
-  return asTrimmedString(payload.summary) || asTrimmedString(payload.message) || "session updated";
+  return (
+    typedSessionFailureStatusText(payload) ||
+    asTrimmedString(payload.summary) ||
+    asTrimmedString(payload.message) ||
+    "session updated"
+  );
+}
+
+function typedSessionFailureStatusText(payload: Record<string, unknown>): string | null {
+  const meta = nestedRecord(payload, "_meta");
+  const jetbrains = nestedRecord(meta, "jetbrains");
+  const air = nestedRecord(jetbrains, "air");
+  const failure = nestedRecord(air, "sessionFailure");
+  if (!failure) {
+    return null;
+  }
+  const title = asTrimmedString(failure.title);
+  if (!title) {
+    return null;
+  }
+  const details = asTrimmedString(failure.details);
+  const label = statusLabel(asTrimmedString(failure.severity));
+  return `${label}: ${title}${details ? `\n${details}` : ""}`;
+}
+
+function nestedRecord(
+  record: Record<string, unknown> | null,
+  key: string,
+): Record<string, unknown> | null {
+  if (!record) {
+    return null;
+  }
+  const value = record[key];
+  return isRecord(value) ? value : null;
+}
+
+function statusLabel(severity: string): string {
+  if (!severity) {
+    return "Notice";
+  }
+  return `${severity.charAt(0).toUpperCase()}${severity.slice(1)}`;
 }
 
 function planStatusText(payload: Record<string, unknown>): string | null {

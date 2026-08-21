@@ -74,6 +74,8 @@ Facade 是 Agent 控制面的唯一状态所有者，负责：
 Runtime 负责解析内置 Agent 名称、启动 ACP adapter、创建或加载 ACP 会话、标准化事件并处理
 进程生命周期。Facade 不直接理解任何 Agent 的私有协议。Codex 和 Claude 是重点实机验证目标；
 Pi、OpenClaw、Gemini 等内置命令映射以及用户配置的 ACP stdio runtime 复用同一通用执行链路。
+Codex adapter 的 typed session failure 会标准化为 `turn.status` 诊断事件，不参与 Facade 对
+`agent_message_chunk` 的最终回复聚合，因此 warning 不会污染普通回复或严格 JSON 输出。
 
 实现保留源自 ACPX 的协议 client、会话恢复、权限、模型/模式配置和进程管理能力，但不把 ACPX
 的通用命令行客户端作为产品面。`prompt`、`exec`、`sessions`、`config`、`compare`、`flow` 等旧

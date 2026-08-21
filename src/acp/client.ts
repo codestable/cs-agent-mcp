@@ -119,6 +119,7 @@ export { buildSpawnCommandOptions };
 export {
   buildAgentSpawnOptions,
   buildQoderAcpCommandArgs,
+  resolveClientCapabilities,
   resolveAgentCloseAfterStdinEndMs,
   resolveClaudeCodeSettingSources,
   shouldIgnoreNonJsonAgentOutputLine,
@@ -133,6 +134,14 @@ const STARTUP_STDERR_MAX_CHARS = 8_192;
 const DEVIN_COMPATIBILITY_CLIENT_CAPABILITIES_META = Object.freeze({
   "cognition.ai/requestDiagnostics": true,
 });
+const CODEX_CLIENT_CAPABILITIES_META = {
+  jetbrains: {
+    air: {
+      version: 1,
+      capabilities: ["sessionFailure"],
+    },
+  },
+};
 const DEVIN_COMPATIBILITY_CLIENT_NAME = "windsurf";
 // This is the embedded Windsurf IDE version bundled with Devin Desktop 3.1.7, the first locally verified version that passes Devin's server-side ACP precondition.
 const DEFAULT_DEVIN_COMPATIBILITY_CLIENT_VERSION = "1.110.1";
@@ -153,6 +162,7 @@ function resolveClientInfo(devinAcp: boolean): { name: string; version: string }
 
 function resolveClientCapabilities(params: {
   devinAcp: boolean;
+  codexAcp: boolean;
   terminal: boolean;
 }): ClientCapabilities {
   const baseCapabilities: ClientCapabilities = {
@@ -163,13 +173,17 @@ function resolveClientCapabilities(params: {
     terminal: params.terminal,
   };
 
-  if (!params.devinAcp) {
+  const meta = {
+    ...(params.devinAcp ? DEVIN_COMPATIBILITY_CLIENT_CAPABILITIES_META : {}),
+    ...(params.codexAcp ? CODEX_CLIENT_CAPABILITIES_META : {}),
+  };
+  if (Object.keys(meta).length === 0) {
     return baseCapabilities;
   }
 
   return {
     ...baseCapabilities,
-    _meta: DEVIN_COMPATIBILITY_CLIENT_CAPABILITIES_META,
+    _meta: meta,
   };
 }
 
@@ -818,12 +832,13 @@ export class AcpClient {
 
   private async initializeProtocolConnection(
     connection: ClientSideConnection,
-    launch: Pick<AgentLaunchPlan, "devinAcp" | "geminiAcp">,
+    launch: Pick<AgentLaunchPlan, "devinAcp" | "geminiAcp" | "codexAcp">,
   ): Promise<InitializeResponse> {
     const initializePromise = connection.initialize({
       protocolVersion: PROTOCOL_VERSION,
       clientCapabilities: resolveClientCapabilities({
         devinAcp: launch.devinAcp,
+        codexAcp: launch.codexAcp,
         terminal: this.options.terminal !== false,
       }),
       clientInfo: resolveClientInfo(launch.devinAcp),
